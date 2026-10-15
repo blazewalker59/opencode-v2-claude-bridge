@@ -1,0 +1,57 @@
+{
+  "name": "opencode-v2-claude-bridge",
+  "version": "0.2.0",
+  "description": "OpenCode V2 bridge powered by the Claude Agent SDK",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "tsx --test tests/**/*.test.ts",
+    "smoke:opencode": "node scripts/opencode-smoke.mjs",
+    "smoke:package": "node scripts/package-smoke.mjs",
+    "prepack": "npm run build",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnathanwoodt4/opencode-v2-claude-bridge.git"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "claude",
+    "claude-agent-sdk",
+    "mcp",
+    "anthropic"
+  ],
+  "author": "Johnathan Wood",
+  "license": "MIT",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/johnathanwoodt4/opencode-v2-claude-bridge/issues"
+  },
+  "homepage": "https://github.com/johnathanwoodt4/opencode-v2-claude-bridge#readme",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.293",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@opencode/plugin": "2.0.21"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}
