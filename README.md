@@ -207,6 +207,8 @@ npm run smoke:package    # packs the tarball and has OpenCode install it
 
 The smoke tests run OpenCode in a throwaway home directory with the plugin pointed at a missing Claude Code executable, so they never touch your OpenCode configuration or sessions and cannot reach Claude.
 
+Besides hand-written scripts, the tests replay real Agent SDK streams from `tests/fixtures/sdk-streams/` (a text reply, a bridged tool round trip, summarized thinking), so they cover the frames Claude Code actually sends. After an SDK upgrade, refresh them with `npm run build && node scripts/record-sdk-streams.mjs`. This makes live Claude requests on your account. The recorder keeps only the message types the bridge reads and replaces IDs, timestamps and the usage-window state with neutral values; review the diff before committing it.
+
 ### Releasing
 
 1. Move the **Unreleased** notes in `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, leaving **Unreleased** empty. The release workflow refuses a tag otherwise.
