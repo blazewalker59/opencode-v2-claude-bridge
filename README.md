@@ -110,7 +110,7 @@ To pass options, use the object form of the entry: `{ "package": "...", "options
 
 ### From a release tarball (recommended)
 
-Each [GitHub release](https://github.com/johnathanwoodt4/opencode-v2-claude-bridge/releases) carries the packed plugin (`opencode-v2-claude-bridge-X.Y.Z.tgz`) and its SHA-256 checksum. Download both to a directory you keep, verify them, and reference the file by absolute path:
+Each [GitHub release](https://github.com/shadowkrazee/opencode-v2-claude-bridge/releases) carries the packed plugin (`opencode-v2-claude-bridge-X.Y.Z.tgz`) and its SHA-256 checksum. Download both to a directory you keep, verify them, and reference the file by absolute path:
 
 ```bash
 mkdir -p ~/.local/share/opencode/plugins && cd ~/.local/share/opencode/plugins
@@ -118,8 +118,8 @@ mkdir -p ~/.local/share/opencode/plugins && cd ~/.local/share/opencode/plugins
 shasum -a 256 -c opencode-v2-claude-bridge-X.Y.Z.tgz.sha256
 # optional, with the GitHub CLI: check the tarball was built by this repository's release workflow
 gh attestation verify opencode-v2-claude-bridge-X.Y.Z.tgz \
-  --repo johnathanwoodt4/opencode-v2-claude-bridge \
-  --signer-workflow johnathanwoodt4/opencode-v2-claude-bridge/.github/workflows/release.yml \
+  --repo shadowkrazee/opencode-v2-claude-bridge \
+  --signer-workflow shadowkrazee/opencode-v2-claude-bridge/.github/workflows/release.yml \
   --source-ref refs/tags/vX.Y.Z
 ```
 
@@ -140,7 +140,7 @@ OpenCode 2.0.21 needs a local file here: an `https://` URL to the tarball is tre
 ```bash
 PLUGIN_DIR="$HOME/.local/share/opencode/plugins/opencode-v2-claude-bridge"
 mkdir -p "$(dirname "$PLUGIN_DIR")"
-git clone https://github.com/johnathanwoodt4/opencode-v2-claude-bridge.git "$PLUGIN_DIR"
+git clone https://github.com/shadowkrazee/opencode-v2-claude-bridge.git "$PLUGIN_DIR"
 cd "$PLUGIN_DIR"
 npm ci
 npm run build
@@ -195,7 +195,7 @@ Known OpenCode 2.0.21 behaviors the bridge depends on or works around:
 
 Give an agent this repository link and the following prompt. The agent should ask before it sends a live Claude request, because that consumes the signed-in user's plan usage.
 
-> Install the OpenCode V2 Claude Agent SDK bridge from https://github.com/johnathanwoodt4/opencode-v2-claude-bridge by following the "From a release tarball" steps in its README. Download the latest release's `.tgz` and `.tgz.sha256` into `~/.local/share/opencode/plugins/`, verify the checksum, and add the tarball as a `file:` plugin in my global OpenCode configuration, preserving all existing configuration and plugins. Do not add, copy, inspect, or request Anthropic credentials or OAuth tokens. Verify that `claude --version` works, restart the OpenCode service, and tell me how to select a `claude-agent-sdk/*` model. Ask me before a live model request.
+> Install the OpenCode V2 Claude Agent SDK bridge from https://github.com/shadowkrazee/opencode-v2-claude-bridge by following the "From a release tarball" steps in its README. Download the latest release's `.tgz` and `.tgz.sha256` into `~/.local/share/opencode/plugins/`, verify the checksum, and add the tarball as a `file:` plugin in my global OpenCode configuration, preserving all existing configuration and plugins. Do not add, copy, inspect, or request Anthropic credentials or OAuth tokens. Verify that `claude --version` works, restart the OpenCode service, and tell me how to select a `claude-agent-sdk/*` model. Ask me before a live model request.
 
 ## Local development
 
