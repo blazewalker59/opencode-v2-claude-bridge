@@ -173,8 +173,8 @@ What stays behind: OpenCode's installed copy of the tarball and its dependencies
 | Component | Version | How it is verified |
 | --- | --- | --- |
 | OpenCode | 2.0.21 | Live use; CI loads the plugin in this version (`npm run smoke:opencode`, `npm run smoke:package`) |
-| Claude Code | 2.1.299 | Installed during the live checks (sessions, tools, attachments, thinking) |
-| Claude Agent SDK | 0.3.293 (pinned exactly) | Unit and flow tests; live use |
+| Claude Code | 2.1.301 (bundled with the Agent SDK); 2.1.300 installed | Live checks through the bundled binary (sessions, tools, attachments, thinking, user settings) |
+| Claude Agent SDK | 0.3.301 (pinned exactly) | Unit and flow tests; live use |
 | MCP TypeScript SDK | 1.32.1 (pinned exactly) | Unit and flow tests |
 | OpenCode plugin API (`@opencode/plugin`) | 2.0.21 (pinned exactly) | Setup tests; the smoke tests above |
 | Node.js (build and tests) | 22, 24 | CI matrix |
