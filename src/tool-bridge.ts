@@ -332,10 +332,20 @@ export class PendingToolCalls {
         if (at >= 0) this.parked.splice(at, 1)
         parked.refuse(result)
       }
-      const timer = setTimeout(
-        () => unpark(errorResult(`The OpenCode bridge has no pending "${mcpName}" call to pair with this request; it was not executed.`)),
-        this.claimWaitMs,
-      )
+      const timer = setTimeout(() => {
+        // A named tool_use that never arrived: should Claude Code's IDs ever stop matching the
+        // streamed ones, pair by tool name and arguments, as for a request that names none.
+        if (toolUseId) {
+          const unclaimed = [...this.calls.values()].filter((call) => !call.claimed)
+          const call = unclaimed[bestMatch(unclaimed, mcpName, canonicalArgs)]
+          if (call) {
+            this.parked.splice(this.parked.indexOf(parked), 1)
+            call.claimed = true
+            return parked.pair(call)
+          }
+        }
+        unpark(errorResult(`The OpenCode bridge has no pending "${mcpName}" call to pair with this request; it was not executed.`))
+      }, this.claimWaitMs)
       // Not unref'd: the wait is short and always belongs to a live turn, and a handler
       // that is still waiting must keep the process alive until it is paired or refused.
       const onAbort = () => unpark(errorResult("The tool call was cancelled before OpenCode returned a result."))

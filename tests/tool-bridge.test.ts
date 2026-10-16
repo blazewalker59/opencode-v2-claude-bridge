@@ -322,6 +322,18 @@ test("PendingToolCalls parks a named handler until its own tool_use registers, n
   assert.equal(resultText(await unnamed), "for the unnamed handler")
 })
 
+test("a handler naming a tool_use that never arrives falls back to tool name and arguments when the wait ends", async () => {
+  const pending = new PendingToolCalls(20)
+  pending.register("toolu_streamed", "read", { filePath: "a.ts" })
+  const named = pending.claim("read", { filePath: "a.ts" }, undefined, "toolu_other_format")
+  pending.deliver("toolu_streamed", ok("paired by arguments"))
+  assert.equal(resultText(await named), "paired by arguments")
+  assert.equal(pending.size, 0)
+
+  const unmatched = await pending.claim("glob", {}, undefined, "toolu_missing")
+  assert.match(resultText(unmatched), /no pending "glob" call/, "with nothing to pair, it is still refused")
+})
+
 test("the MCP server reads the tool_use ID Claude Code stamps on tools/call", async () => {
   const pending = new PendingToolCalls()
   const { tools } = convertTools([{ type: "function", function: { name: "read", parameters: { type: "object" } } }], "read-only")
