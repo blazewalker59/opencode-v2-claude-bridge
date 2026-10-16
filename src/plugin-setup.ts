@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, statSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute } from "node:path"
 import { Model, type Plugin, Provider } from "@opencode/plugin"
@@ -53,17 +53,27 @@ const isDirectory = (path: string): boolean => {
 }
 
 /**
- * The Claude Code debug directory, created readable only by you. Its logs can
- * contain message content. A directory that cannot be created stops the plugin
- * from loading, naming it, as a bad `debugLog` does.
+ * The Claude Code debug directory, readable only by you: its logs can contain
+ * message content. A missing directory is created that way. An existing one is
+ * used only if it already is, and its permissions are never changed, so naming
+ * a shared directory cannot quietly lock others out of it. A directory that
+ * cannot be used stops the plugin from loading, naming it, as a bad `debugLog` does.
  */
 const prepareDebugDir = (dir: string): string => {
+  const unusable = (reason: string) => new Error(`Plugin option claudeDebugDir: cannot use ${dir}: ${reason}`)
+  let created: string | undefined
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    chmodSync(dir, 0o700)
+    // The first directory created, or undefined when `dir` already existed.
+    created = mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (created !== undefined) chmodSync(dir, 0o700)
   } catch (error) {
-    throw new Error(`Plugin option claudeDebugDir: cannot use ${dir}: ${error instanceof Error ? error.message : String(error)}`)
+    throw unusable(error instanceof Error ? error.message : String(error))
   }
+  if (created !== undefined) return dir
+  const stats = lstatSync(dir)
+  if (!stats.isDirectory()) throw unusable("it is not a directory (a symbolic link is not followed)")
+  if (process.getuid && stats.uid !== process.getuid()) throw unusable("it belongs to another user")
+  if ((stats.mode & 0o077) !== 0) throw unusable("other users can open it; name a new directory, or run chmod 700 on it")
   return dir
 }
 
