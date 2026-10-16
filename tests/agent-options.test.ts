@@ -83,3 +83,13 @@ test("summarized thinking is requested only when the bridge knows the model supp
   assert.deepEqual(agentOptions("/work", { ...base, showThinking: true }).thinking, { type: "adaptive", display: "summarized" })
   assert.equal(agentOptions("/work", base).thinking, undefined, "otherwise the Agent SDK default is left alone")
 })
+
+test("every query keeps the git snapshot out of the prompt and skips claude.ai connectors", () => {
+  const base = { model: "m", abortController: new AbortController(), allowedTools: [], persistSession: false }
+  for (const system of [AGENT, { type: "task", text: "Write a title." } as const]) {
+    const options = agentOptions("/work", { ...base, system })
+    assert.deepEqual(options.settings, { includeGitInstructions: false }, "a commit must not rewrite the cached prompt")
+    assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "claude.ai connectors are never fetched")
+    assert.equal(options.env?.PATH, process.env.PATH, "the Agent SDK replaces the environment, so the inherited one is copied")
+  }
+})

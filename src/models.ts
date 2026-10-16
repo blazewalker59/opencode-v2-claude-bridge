@@ -1,14 +1,7 @@
 import type { ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import { CHILD_SETTINGS, childEnv, SETTING_SOURCES } from "./claude-code.js"
 
 export const PROVIDER_ID = "claude-agent-sdk"
-
-/**
- * Claude Code settings every query loads: the user's own `~/.claude/settings.json`,
- * so its `env` (an API gateway, for example), hooks and other user configuration
- * apply as they do in Claude Code. Project and local settings are not loaded: a
- * repository's `.claude/settings.json` could otherwise add hooks to every turn.
- */
-export const SETTING_SOURCES: NonNullable<Options["settingSources"]> = ["user"]
 
 export type BridgeModel = {
   /** Model ID OpenCode uses and the bridge passes to the Agent SDK (an alias such as `sonnet`, or a full ID). */
@@ -103,7 +96,7 @@ export const discoverModels = async (
   }
   // The same setup as a turn: the user's settings (so a configured gateway answers discovery
   // too), no tools, and no MCP servers (strict mode ignores the user's).
-  const query = start(silent, { ...options, settingSources: SETTING_SOURCES, persistSession: false, tools: [], mcpServers: {}, strictMcpConfig: true })
+  const query = start(silent, { ...options, settingSources: SETTING_SOURCES, settings: CHILD_SETTINGS, env: childEnv(), persistSession: false, tools: [], mcpServers: {}, strictMcpConfig: true })
   let timer: NodeJS.Timeout | undefined
   let onAbort: () => void = () => {}
   try {

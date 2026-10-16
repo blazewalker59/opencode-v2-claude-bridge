@@ -63,10 +63,14 @@ test("discovery never sends a message, keeps nothing on disk, and always closes 
   assert.equal(models.length, 5)
   assert.equal(sent, false, "the input iterable never yields a message")
   assert.equal(closed, 1)
-  assert.deepEqual(seen, {
+  const { env, ...rest } = seen ?? {}
+  assert.equal(env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "the same child environment as a turn")
+  assert.equal(env?.PATH, process.env.PATH, "the inherited environment is kept")
+  assert.deepEqual(rest, {
     cwd: "/work",
     pathToClaudeCodeExecutable: "/opt/claude",
     settingSources: ["user"],
+    settings: { includeGitInstructions: false },
     persistSession: false,
     tools: [],
     mcpServers: {},
