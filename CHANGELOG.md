@@ -4,6 +4,8 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-16
+
 ### Breaking
 
 - Agent turns run on Claude Code's own system prompt instead of OpenCode's. With a subscription, requests carrying OpenCode's agent prompt failed with `400 You're out of extra usage` even with plan usage left. OpenCode's harness guidance, its `<system-update>` notices inside user messages, skill listing, custom agent prompts and `opencode.json` `instructions` no longer reach Claude; see **System prompt** in the README. Title and compaction requests still use OpenCode's task prompt.
