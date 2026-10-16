@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { readFileSync } from "node:fs"
 import { agentOptions } from "../src/bridge-server.js"
+import { CLIENT_APP } from "../src/claude-code.js"
 import { convertTools, createToolServer, PendingToolCalls } from "../src/tool-bridge.js"
 
 const AGENT = { type: "claude-code" } as const
@@ -91,6 +93,7 @@ test("every query keeps the git snapshot out of the prompt and skips claude.ai c
     assert.deepEqual(options.settings, { includeGitInstructions: false }, "a commit must not rewrite the cached prompt")
     assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "claude.ai connectors are never fetched")
     assert.equal(options.env?.DISABLE_AUTO_COMPACT, "1", "OpenCode compacts the conversation, never Claude Code behind its back")
+    assert.equal(options.env?.CLAUDE_AGENT_SDK_CLIENT_APP, CLIENT_APP, "requests name this plugin")
     assert.equal(options.env?.PATH, process.env.PATH, "the Agent SDK replaces the environment, so the inherited one is copied")
   }
 })
@@ -107,4 +110,9 @@ test("Claude Code's own debug log is written only when a file is given", () => {
   assert.deepEqual([on.debug, on.debugFile], [true, "/logs/q.log"])
   const off = agentOptions("/work", base)
   assert.equal("debug" in off || "debugFile" in off, false)
+})
+
+test("the client identifier names this package at its released version", () => {
+  const { name, version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { name: string; version: string }
+  assert.equal(CLIENT_APP, `${name}/${version}`)
 })

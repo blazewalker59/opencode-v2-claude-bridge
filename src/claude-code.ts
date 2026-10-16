@@ -20,6 +20,9 @@ export const SETTING_SOURCES: NonNullable<Options["settingSources"]> = ["user"]
  */
 export const CHILD_SETTINGS = { includeGitInstructions: false } satisfies Options["settings"]
 
+/** This plugin and its version, as Claude Code reports it. A test keeps it in step with package.json. */
+export const CLIENT_APP = "opencode-v2-claude-bridge/0.2.0"
+
 /**
  * Variables set for every Claude Code child on top of the inherited environment.
  *
@@ -31,8 +34,15 @@ export const CHILD_SETTINGS = { includeGitInstructions: false } satisfies Option
  * `DISABLE_AUTO_COMPACT=1`: OpenCode owns the conversation and compacts it from
  * the token usage the bridge reports. If Claude Code also compacted its copy,
  * the two histories would differ in a way session fingerprints cannot detect.
+ *
+ * `CLAUDE_AGENT_SDK_CLIENT_APP`: names this plugin in the User-Agent of Claude
+ * Code's requests, as the Agent SDK documents for apps built on it.
  */
-const CHILD_VARIABLES: Record<string, string> = { ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }
+const CHILD_VARIABLES: Record<string, string> = {
+  ENABLE_CLAUDEAI_MCP_SERVERS: "0",
+  DISABLE_AUTO_COMPACT: "1",
+  CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP,
+}
 
 /** The environment for a Claude Code child. The Agent SDK replaces, not merges, the environment, so the inherited one is copied. */
 export const childEnv = (env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> => ({ ...env, ...CHILD_VARIABLES })

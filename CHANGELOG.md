@@ -24,6 +24,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - Claude Agent SDK 0.3.301 (Claude Code 2.1.301), up from 0.3.293.
 - Claude Code's git instructions and git-status snapshot are left out of the system prompt, so a commit no longer forces the conversation to be cached again.
 - claude.ai connectors are no longer fetched for bridge queries; Claude could never call them.
+- Claude Code's requests name this plugin in their User-Agent (`client-app/opencode-v2-claude-bridge/<version>`), through the Agent SDK's `CLAUDE_AGENT_SDK_CLIENT_APP`.
 
 ## [0.2.0] - 2026-10-15
 
