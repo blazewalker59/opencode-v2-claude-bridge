@@ -234,9 +234,14 @@ type PendingCall = {
 type ParkedClaim = {
   readonly mcpName: string
   readonly canonicalArgs: string
+  /** The tool_use ID Claude Code stamped on the MCP request, when it did. */
+  readonly toolUseId?: string
   pair: (call: PendingCall) => void
   refuse: (result: CallToolResult) => void
 }
+
+/** Request metadata key in which Claude Code names the tool_use block an MCP call answers. */
+export const TOOL_USE_ID_META = "claudecode/toolUseId"
 
 /** How long an MCP handler waits for its streamed tool_use before it is refused. */
 const DEFAULT_CLAIM_WAIT_MS = 5_000
@@ -253,10 +258,11 @@ const bestMatch = (entries: ReadonlyArray<{ mcpName: string; canonicalArgs: stri
  *
  * Two independent events must meet: OpenCode delivering a result, and the
  * Agent SDK invoking the MCP handler. Either may happen first; whichever
- * comes second completes the call. The MCP request does not carry the
- * tool_use ID through any public contract, so a handler is matched to the
- * oldest unclaimed call with the same tool name and arguments (falling back
- * to the same tool name).
+ * comes second completes the call. Claude Code names the tool_use a request
+ * answers in its `_meta` (`claudecode/toolUseId`), and the handler is paired
+ * with exactly that call. That is a Claude Code extension, not part of MCP, so
+ * a request without it is matched to the oldest unclaimed call with the same
+ * tool name and arguments (falling back to the same tool name).
  *
  * The handler can also run before the bridge has seen the streamed tool_use
  * it answers: the Agent SDK handles MCP requests as they arrive but queues
@@ -274,11 +280,13 @@ export class PendingToolCalls {
   register(id: string, mcpName: string, args: unknown) {
     const call: PendingCall = { id, mcpName, canonicalArgs: canonicalJson(args), claimed: false }
     this.calls.set(id, call)
-    const index = bestMatch(this.parked, mcpName, call.canonicalArgs)
-    if (index < 0) return
-    const [parked] = this.parked.splice(index, 1)
+    // A handler that named this tool_use takes it; otherwise the best match among handlers that named none.
+    const unnamed = this.parked.filter((parked) => !parked.toolUseId)
+    const parked = this.parked.find((entry) => entry.toolUseId === id) ?? unnamed[bestMatch(unnamed, mcpName, call.canonicalArgs)]
+    if (!parked) return
+    this.parked.splice(this.parked.indexOf(parked), 1)
     call.claimed = true
-    parked!.pair(call)
+    parked.pair(call)
   }
 
   /** Returns false when the ID is unknown or already has a result. */
@@ -294,11 +302,12 @@ export class PendingToolCalls {
   }
 
   /** MCP handler entry point: resolves with OpenCode's result for the matching call. */
-  claim(mcpName: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
+  claim(mcpName: string, args: unknown, signal?: AbortSignal, toolUseId?: string): Promise<CallToolResult> {
     if (this.closedReason) return Promise.resolve(errorResult(this.closedReason))
     const canonicalArgs = canonicalJson(args)
     const unclaimed = [...this.calls.values()].filter((call) => !call.claimed)
-    const index = bestMatch(unclaimed, mcpName, canonicalArgs)
+    // Claude Code names the tool_use a request answers; without that name, the best match by tool and arguments.
+    const index = toolUseId ? unclaimed.findIndex((call) => call.id === toolUseId) : bestMatch(unclaimed, mcpName, canonicalArgs)
     if (index >= 0) {
       const call = unclaimed[index]!
       call.claimed = true
@@ -308,6 +317,7 @@ export class PendingToolCalls {
       const parked: ParkedClaim = {
         mcpName,
         canonicalArgs,
+        toolUseId,
         pair: (call) => {
           settle()
           resolve(this.await(call, signal))
@@ -389,8 +399,10 @@ export const createToolServer = (tools: BridgedTool[], pending: PendingToolCalls
       _meta: { "anthropic/alwaysLoad": true },
     })),
   }))
-  server.server.setRequestHandler(CallToolRequestSchema, (request, extra) =>
-    pending.claim(request.params.name, request.params.arguments ?? {}, extra.signal),
-  )
+  server.server.setRequestHandler(CallToolRequestSchema, (request, extra) => {
+    // Claude Code stamps each tools/call with the tool_use it answers (a Claude Code extension, not MCP).
+    const toolUseId = request.params._meta?.[TOOL_USE_ID_META]
+    return pending.claim(request.params.name, request.params.arguments ?? {}, extra.signal, typeof toolUseId === "string" ? toolUseId : undefined)
+  })
   return { type: "sdk", name: MCP_SERVER_NAME, instance: server }
 }

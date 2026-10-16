@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import { MCP_TOOL_PREFIX } from "../../src/tool-bridge.js"
+import { MCP_TOOL_PREFIX, TOOL_USE_ID_META } from "../../src/tool-bridge.js"
 import type { Script } from "./fake-agent.js"
 
 /**
@@ -42,7 +42,8 @@ export const replay =
       } else if (message.type === "user") {
         for (const block of blocks(message)) {
           const call = block.type === "tool_result" && block.tool_use_id ? calls.get(block.tool_use_id) : undefined
-          if (call) await client!.callTool(call)
+          // As Claude Code does, the request names the tool_use it answers.
+          if (call) await client!.callTool({ ...call, _meta: { [TOOL_USE_ID_META]: block.tool_use_id } })
         }
       }
       yield message
