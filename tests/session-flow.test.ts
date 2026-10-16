@@ -75,14 +75,65 @@ test("the second turn of a session resumes the Agent SDK session and sends only 
 
     assert.equal(runs[0]?.persistSession, true)
     assert.match(runs[0]?.sessionId ?? "", /^[0-9a-f-]{36}$/)
-    assert.equal(runs[0]?.systemPrompt, "You are OpenCode's build agent.", "OpenCode's system prompt is the SDK system prompt")
-    assert.doesNotMatch(prompts[0] ?? "", /<system-/, "and is not repeated in the user prompt")
+    assert.deepEqual(runs[0]?.system, { type: "claude-code", append: undefined }, "agent turns run on Claude Code's own prompt")
+    assert.doesNotMatch(prompts[0] ?? "", /<system-|build agent/, "OpenCode's agent prompt is not forwarded anywhere")
 
     assert.equal(runs[1]?.resume, runs[0]?.sessionId)
     assert.equal(runs[1]?.sessionId, undefined)
     assert.equal(prompts[1], "And b.ts?", "only the new message is sent")
-    assert.equal(runs[1]?.systemPrompt, "You are OpenCode's build agent.")
+    assert.deepEqual(runs[1]?.system, { type: "claude-code", append: undefined })
   })
+})
+
+test("agent turns append the user's instruction files, read fresh on every turn", async () => {
+  let reads = 0
+  const instructions = async () => {
+    reads++
+    return { text: `Rule ${reads}`, files: ["/repo/AGENTS.md"], truncated: [], unreadable: [] }
+  }
+  await withBridge(
+    replying,
+    async ({ port, runs }) => {
+      const first: ChatMessage[] = [SYSTEM, { role: "user", content: "Hi" }]
+      await post(port, { model, stream: true, messages: first }, primary())
+      await settle()
+      const second = [...first, { role: "assistant" as const, content: "reply" }, { role: "user" as const, content: "Again" }]
+      await post(port, { model, stream: true, messages: second }, primary())
+      assert.deepEqual(runs[0]?.system, { type: "claude-code", append: "Rule 1" })
+      assert.deepEqual(runs[1]?.system, { type: "claude-code", append: "Rule 2" }, "an edited file applies on the next turn")
+    },
+    { instructions },
+  )
+})
+
+test("a turn still runs when the instruction files cannot be read", async () => {
+  await withBridge(
+    replying,
+    async ({ port, runs }) => {
+      assert.equal(textOf(await post(port, { model, stream: true, messages: [SYSTEM, { role: "user", content: "Hi" }] }, primary())), "reply")
+      assert.deepEqual(runs[0]?.system, { type: "claude-code", append: undefined })
+    },
+    { instructions: async () => Promise.reject(new Error("EACCES")) },
+  )
+})
+
+test("a title request keeps OpenCode's task prompt and reads no instruction files", async () => {
+  let reads = 0
+  await withBridge(
+    replying,
+    async ({ port, runs }) => {
+      const title: ChatMessage[] = [{ role: "system", content: "You are a title generator." }, { role: "user", content: "Hi" }]
+      await post(port, { model, stream: true, messages: title }, { [SESSION_HEADER]: "ses_1", [KIND_HEADER]: "title" })
+      assert.deepEqual(runs[0]?.system, { type: "task", text: "You are a title generator." })
+      assert.equal(reads, 0)
+    },
+    {
+      instructions: async () => {
+        reads++
+        return { text: "x", files: [], truncated: [], unreadable: [] }
+      },
+    },
+  )
 })
 
 test("a turn that used tools is resumable once it finishes", async () => {
@@ -481,4 +532,17 @@ test("shutdown waits for the disposed turns' session writes", { timeout: 5_000 }
   releaseRemove()
   await closing
   assert.equal(closed, true)
+})
+
+test("an OpenCode system-update notice never reaches Claude, and does not break session resume", async () => {
+  await withBridge(replying, async ({ port, runs, prompts }) => {
+    const first: ChatMessage[] = [SYSTEM, { role: "user", content: "Hi" }]
+    await post(port, { model, stream: true, messages: first }, primary())
+    await settle()
+    const notice: ChatMessage = { role: "user", content: "<system-update>\nThe Code Mode tool catalog has changed.\n</system-update>" }
+    const second = [...first, { role: "assistant" as const, content: "reply" }, notice, { role: "user" as const, content: "Tell me a joke" }]
+    assert.equal(textOf(await post(port, { model, stream: true, messages: second }, primary())), "reply")
+    assert.equal(runs[1]?.resume, runs[0]?.sessionId, "the session still resumes")
+    assert.equal(prompts[1], "Tell me a joke")
+  })
 })

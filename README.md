@@ -237,6 +237,16 @@ The bridge invokes the public Agent SDK in the local user context. Anthropic's s
 
 Before running a live smoke test, confirm that the account holder is willing to consume plan usage.
 
+## System prompt
+
+Claude runs as Claude Code's own agent inside OpenCode. OpenCode stays the interface, the session store, and the tool host; the instructions Claude follows come from Claude Code.
+
+- **Agent turns** use Claude Code's built-in system prompt (the Agent SDK's `claude_code` preset). The bridge appends your own instruction files, found the way OpenCode finds them: the global `~/.config/opencode/AGENTS.md` (or `$XDG_CONFIG_HOME/opencode/AGENTS.md`), falling back to `~/.claude/CLAUDE.md`; then one file per directory from the repository root down to the OpenCode project, `AGENTS.md` preferred over `CLAUDE.md`. They are read on every turn, so edits apply to the next message. Each file is capped at 64,000 characters and all of them at 128,000; the debug log names any file that was cut or could not be read (`turn.start`).
+- **Title and compaction requests** keep OpenCode's prompt for that task, which describes the task itself.
+- **OpenCode's agent prompt is not sent.** With a subscription, requests that carried it were rejected as Extra Usage (`You're out of extra usage`), while the same account and model worked with Claude Code's prompt. So the bridge no longer forwards it, and there is no option to turn it back on.
+
+Not forwarded as a result: OpenCode's harness guidance (its formatting rules and Code Mode instructions), the `<system-update>` notices OpenCode inserts into user messages when that guidance or its tool catalog changes (Claude would otherwise read them as text injected into your message), its skill listing, prompts of custom OpenCode agents, and files listed under `instructions` in `opencode.json`. OpenCode still enforces its permissions and agent modes on every tool call, since it executes them. Claude Code settings, hooks, and `CLAUDE.md` loading stay off (`settingSources: []`); the bridge reads the files above itself.
+
 ## Safety defaults
 
 The bridge never approves a tool call itself, never uses `allowDangerouslySkipPermissions`, and never bypasses OpenCode permissions. Shell and write tools reach Claude only under the opt-in `"opencode"` tool policy, and even then OpenCode decides each call. Tests pin this posture (`tests/agent-options.test.ts`).
@@ -267,6 +277,7 @@ The bridge never approves a tool call itself, never uses `allowDangerouslySkipPe
 | Plugin fails to load with “Unknown plugin option” | Check the option names and values against **Configuration**. |
 | Claude authentication error | Run `claude login` in your own terminal and verify `claude --version`. Authentication errors shown in OpenCode (401, 403, or a login message from Claude Code) include this hint automatically. The bridge never accepts credentials. |
 | Unexpected gateway/API-key error | Check whether `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` is inherited by OpenCode. Errors name any that are set (never their values), and the debug log records them at startup as `config.gateway`. A shell started from another tool, such as a Claude Code session, may pass these on. |
+| `400 You're out of extra usage` | Check your plan usage in Claude first: the error also means your plan limits are spent and Extra Usage is off or exhausted. If `claude -p "hi"` works in a terminal while the bridge fails, check that you run a release with **System prompt** behavior (0.3.0 or later); earlier releases sent OpenCode's agent prompt, which subscriptions bill as Extra Usage. |
 | Claude says it cannot edit or run commands | Expected under the default `read-only` tool policy. See **Configuration** before opting in to `"opencode"`. |
 | Plugin fails to load with “Invalid toolPolicy” | `toolPolicy` must be `"read-only"` or `"opencode"`. |
 | Need to see what the bridge is doing | Set `OPENCODE_CLAUDE_BRIDGE_DEBUG_LOG=/path/to/bridge.log` in the environment that starts OpenCode (for example, `opencode run --standalone`). The JSON-lines log records roles, tool names, tool-call IDs, turn outcomes, and error messages as Claude Code reports them, cut to 500 characters. The bridge never logs message content itself, though an error message from Claude Code or the API could quote part of a request. The file is kept readable only by you (mode `0600`, applied to an existing file too). The path must be a regular file you own with a single link: a symbolic link, hard link, FIFO or device there is refused. With the `debugLog` option, a path that cannot be written stops the plugin from loading, naming the path; with the environment variable, which may be inherited by every OpenCode launch, a relative or unwritable path only prints a warning and the plugin loads without a log. A later write failure (a full disk) switches the log off instead of failing requests. |

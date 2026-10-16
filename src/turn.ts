@@ -18,6 +18,13 @@ import { type AgentFailure, BRIDGE_ERROR, classifyAgentError, type ErrorClass, i
 import type { RunPlan } from "./sessions.js"
 import { type BridgedTool, createToolServer, errorResult, PendingToolCalls, withNote } from "./tool-bridge.js"
 
+/**
+ * Agent turns run on Claude Code's own system prompt plus the user's
+ * instruction files; OpenCode's agent prompt is not forwarded. One-off task
+ * requests (titles, compaction) keep OpenCode's task prompt, which is the task.
+ */
+export type SystemPrompt = { type: "claude-code"; append?: string } | { type: "task"; text: string }
+
 export type AgentRunInput = {
   /** Streaming input: one user message, held open until the turn ends. */
   prompt: AsyncIterable<SDKUserMessage>
@@ -27,8 +34,8 @@ export type AgentRunInput = {
   toolServer?: McpSdkServerConfigWithInstance
   /** Fully qualified MCP tool names Claude may call (`mcp__opencode__*`). */
   allowedTools: string[]
-  /** OpenCode's system prompt, used as the Agent SDK system prompt. */
-  systemPrompt?: string
+  /** The system prompt for this turn. */
+  system: SystemPrompt
   /** Resume this Agent SDK session. */
   resume?: string
   /** Start a new Agent SDK session with this ID. */
@@ -84,7 +91,7 @@ export type TurnOptions = {
   model: string
   /** Tried in order; a later plan runs only if the previous one failed before Claude produced output. */
   plans: RunPlan[]
-  system?: string
+  system: SystemPrompt
   showThinking?: boolean
   tools: BridgedTool[]
   toolResultTimeoutMs: number
@@ -158,7 +165,7 @@ export class Turn {
         // An MCP server instance connects once, so each attempt gets its own.
         toolServer: this.options.tools.length > 0 ? createToolServer(this.options.tools, this.pending) : undefined,
         allowedTools: this.options.tools.map((tool) => tool.qualifiedName),
-        systemPrompt: this.options.system,
+        system: this.options.system,
         resume: plan.resume,
         sessionId: plan.sessionId,
         persistSession: plan.persist,

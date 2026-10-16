@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Breaking
+
+- Agent turns run on Claude Code's own system prompt instead of OpenCode's. With a subscription, requests carrying OpenCode's agent prompt failed with `400 You're out of extra usage` even with plan usage left. OpenCode's harness guidance, its `<system-update>` notices inside user messages, skill listing, custom agent prompts and `opencode.json` `instructions` no longer reach Claude; see **System prompt** in the README. Title and compaction requests still use OpenCode's task prompt.
+
+### Added
+
+- Your instruction files reach Claude on every agent turn: the global OpenCode `AGENTS.md` (or `~/.claude/CLAUDE.md`), then `AGENTS.md` or `CLAUDE.md` from each directory between the repository root and the project, with size limits. The debug log's `turn.start` names the prompt kind and the files used.
+
 ## [0.2.0] - 2026-10-15
 
 ### Breaking

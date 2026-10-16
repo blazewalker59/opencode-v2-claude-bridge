@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { textContent, toAgentPrompt, transcriptTags } from "../src/openai.js"
+import { textContent, toAgentPrompt, transcriptTags, withoutSystemUpdates } from "../src/openai.js"
 
 const tags = transcriptTags("n0nce")
 
@@ -61,4 +61,32 @@ test("each prompt gets its own unguessable suffix", () => {
   const first = transcriptTags().suffix
   assert.match(first, /^[0-9a-f]{12}$/)
   assert.notEqual(first, transcriptTags().suffix)
+})
+
+// OpenCode's wrapper for a harness notice, with its body HTML-escaped.
+const notice = (body: string) => `<system-update>\n${body}\n</system-update>`
+
+test("OpenCode's system-update notices are removed from user messages", () => {
+  const catalog = notice("The Code Mode tool catalog has changed.\n\n- tools.x(): Promise&lt;unknown&gt;")
+  assert.deepEqual(
+    withoutSystemUpdates([
+      { role: "system", content: notice("kept: not a user message") },
+      { role: "user", content: catalog },
+      { role: "user", content: `${catalog}\nTell me a joke` },
+      { role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } }, { type: "text", text: catalog }] },
+      { role: "user", content: [{ type: "text", text: catalog }] },
+      { role: "user", content: "<system-update> typed by the user, not a notice" },
+    ]),
+    [
+      { role: "system", content: notice("kept: not a user message") },
+      { role: "user", content: "Tell me a joke" },
+      { role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } }] },
+      { role: "user", content: "<system-update> typed by the user, not a notice" },
+    ],
+  )
+})
+
+test("messages without notices are returned unchanged", () => {
+  const messages = [{ role: "user" as const, content: [{ type: "text", text: "hi" }] }]
+  assert.equal(withoutSystemUpdates(messages)[0], messages[0])
 })

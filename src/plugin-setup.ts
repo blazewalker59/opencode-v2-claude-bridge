@@ -1,4 +1,5 @@
 import { statSync } from "node:fs"
+import { homedir } from "node:os"
 import { isAbsolute } from "node:path"
 import { Model, type Plugin, Provider } from "@opencode/plugin"
 import { type Options, query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -13,6 +14,7 @@ import {
 } from "./models.js"
 import { type BridgeLog, startBridgeServer, TOKEN_HEADER } from "./bridge-server.js"
 import { openDebugLog } from "./debug-log.js"
+import { readInstructions } from "./instructions.js"
 import {
   forgetDeletedSessions,
   isSessionState,
@@ -32,6 +34,8 @@ export type SetupDependencies = {
   query?: (prompt: AsyncIterable<SDKUserMessage>, options: Options) => Pick<Query, "supportedModels" | "close">
   isDirectory?: (path: string) => boolean
   env?: NodeJS.ProcessEnv
+  /** Home directory, where the global instruction files live. */
+  home?: string
   /** Problems worth telling the user about that should not stop the plugin from loading. */
   warn?: (message: string) => void
 }
@@ -148,6 +152,8 @@ export const setupBridge = async (context: SetupContext, dependencies: SetupDepe
     sessions,
     titleModel: options.titleModel,
     claudeExecutable: options.claudeExecutable,
+    // Found from the OpenCode project, as OpenCode finds them, whatever directory Claude Code runs in.
+    instructions: () => readInstructions(context.location.directory, dependencies.home ?? homedir(), env),
     // The first request can arrive before discovery answers; wait briefly for it.
     summarizedThinking: async (model) => {
       await Promise.race([discoveryDone, new Promise((resolve) => setTimeout(resolve, 2_000).unref())])

@@ -3,6 +3,8 @@ import test from "node:test"
 import { agentOptions } from "../src/bridge-server.js"
 import { convertTools, createToolServer, PendingToolCalls } from "../src/tool-bridge.js"
 
+const AGENT = { type: "claude-code" } as const
+
 const fn = (name: string) => ({ type: "function", function: { name } })
 
 const forbiddenPosture = (options: ReturnType<typeof agentOptions>) => {
@@ -15,7 +17,7 @@ test("with OpenCode tools, Claude gets only the bridged tools and nothing auto-a
   const { tools } = convertTools([fn("read"), fn("shell"), fn("edit")], "opencode")
   const toolServer = createToolServer(tools, new PendingToolCalls())
   const allowedTools = tools.map((tool) => tool.qualifiedName)
-  const options = agentOptions("/work", { model: "m", abortController: new AbortController(), toolServer, allowedTools, persistSession: true })
+  const options = agentOptions("/work", { model: "m", abortController: new AbortController(), toolServer, allowedTools, persistSession: true, system: AGENT })
 
   forbiddenPosture(options)
   assert.deepEqual(options.tools, [], "built-in Claude Code tools are removed")
@@ -27,7 +29,7 @@ test("with OpenCode tools, Claude gets only the bridged tools and nothing auto-a
 })
 
 test("without OpenCode tools, Claude answers in text only: nothing runs outside OpenCode", () => {
-  const options = agentOptions("/work", { model: "m", abortController: new AbortController(), allowedTools: ["Read"], persistSession: true })
+  const options = agentOptions("/work", { model: "m", abortController: new AbortController(), allowedTools: ["Read"], persistSession: true, system: AGENT })
   forbiddenPosture(options)
   assert.deepEqual(options.tools, [], "no built-in Claude Code tools, not even read-only ones")
   assert.deepEqual(options.allowedTools, [], "nothing is allowed without a bridged tool server")
@@ -38,31 +40,46 @@ test("without OpenCode tools, Claude answers in text only: nothing runs outside 
 })
 
 test("session fields map onto the public Agent SDK options", () => {
-  const base = { model: "m", abortController: new AbortController(), allowedTools: [] }
-  const fresh = agentOptions("/work", { ...base, sessionId: "11111111-1111-4111-8111-111111111111", persistSession: true, systemPrompt: "OpenCode rules" })
+  const base = { model: "m", abortController: new AbortController(), allowedTools: [], system: AGENT }
+  const fresh = agentOptions("/work", { ...base, sessionId: "11111111-1111-4111-8111-111111111111", persistSession: true })
   assert.equal(fresh.sessionId, "11111111-1111-4111-8111-111111111111")
   assert.equal(fresh.resume, undefined)
   assert.equal(fresh.persistSession, true)
-  assert.deepEqual(fresh.systemPrompt, { type: "custom", prompt: "OpenCode rules", snapshot: false })
 
   const resumed = agentOptions("/work", { ...base, resume: "sdk-1", sessionId: "ignored", persistSession: true })
   assert.equal(resumed.resume, "sdk-1")
   assert.equal(resumed.sessionId, undefined, "sessionId cannot be combined with resume")
-  assert.equal(resumed.systemPrompt, undefined)
 
   const throwaway = agentOptions("/work", { ...base, persistSession: false })
   assert.equal(throwaway.persistSession, false)
   assert.equal(throwaway.sessionId, undefined)
 })
 
+test("agent turns run on Claude Code's own prompt; task requests keep their task prompt", () => {
+  const base = { model: "m", abortController: new AbortController(), allowedTools: [], persistSession: true }
+  const agent = agentOptions("/work", { ...base, system: { type: "claude-code", append: "Use tabs." } })
+  assert.deepEqual(agent.systemPrompt, { type: "preset", preset: "claude_code", append: "Use tabs.", snapshot: false })
+
+  const resumed = agentOptions("/work", { ...base, resume: "sdk-1", system: AGENT })
+  assert.deepEqual(
+    resumed.systemPrompt,
+    { type: "preset", preset: "claude_code", snapshot: false },
+    "sent on resumed turns too: without it the Agent SDK falls back to a minimal prompt",
+  )
+
+  const task = agentOptions("/work", { ...base, persistSession: false, system: { type: "task", text: "Write a title." } })
+  assert.deepEqual(task.systemPrompt, { type: "custom", prompt: "Write a title.", snapshot: false })
+  assert.deepEqual(task.settingSources, [], "neither kind loads Claude Code settings")
+})
+
 test("a configured Claude Code executable is passed to the Agent SDK", () => {
-  const base = { model: "m", abortController: new AbortController(), allowedTools: [], persistSession: false }
+  const base = { model: "m", abortController: new AbortController(), allowedTools: [], persistSession: false, system: AGENT }
   assert.equal(agentOptions("/work", base, "/opt/claude/bin/claude").pathToClaudeCodeExecutable, "/opt/claude/bin/claude")
   assert.equal("pathToClaudeCodeExecutable" in agentOptions("/work", base), false)
 })
 
 test("summarized thinking is requested only when the bridge knows the model supports it", () => {
-  const base = { model: "sonnet", abortController: new AbortController(), allowedTools: [], persistSession: false }
+  const base = { model: "sonnet", abortController: new AbortController(), allowedTools: [], persistSession: false, system: AGENT }
   assert.deepEqual(agentOptions("/work", { ...base, showThinking: true }).thinking, { type: "adaptive", display: "summarized" })
   assert.equal(agentOptions("/work", base).thinking, undefined, "otherwise the Agent SDK default is left alone")
 })

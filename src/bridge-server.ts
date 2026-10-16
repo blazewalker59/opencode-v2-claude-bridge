@@ -2,7 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { type Options, query } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
-import type { ChatCompletionRequest, ChatMessage } from "./openai.js"
+import type { Instructions } from "./instructions.js"
+import { type ChatCompletionRequest, type ChatMessage, withoutSystemUpdates } from "./openai.js"
 import {
   fingerprint,
   KIND_HEADER,
@@ -20,9 +21,9 @@ import {
   toToolResult,
   type ToolPolicy,
 } from "./tool-bridge.js"
-import { type AgentRun, type AgentRunInput, Turn } from "./turn.js"
+import { type AgentRun, type AgentRunInput, type SystemPrompt, Turn } from "./turn.js"
 
-export type { AgentRun, AgentRunInput } from "./turn.js"
+export type { AgentRun, AgentRunInput, SystemPrompt } from "./turn.js"
 
 export type BridgeServerOptions = {
   cwd: string
@@ -40,6 +41,8 @@ export type BridgeServerOptions = {
   titleModel?: string
   /** Path to the Claude Code executable, when it is not where the Agent SDK looks. */
   claudeExecutable?: string
+  /** The user's instruction files for agent turns, read on every turn. Defaults to none. */
+  instructions?: () => Promise<Instructions>
   /** Whether to show summarized thinking for a model (true only for models known to support adaptive thinking). */
   summarizedThinking?: (model: string) => boolean | Promise<boolean>
   /** The secret every completion request must carry in `TOKEN_HEADER`. Defaults to a new random one. */
@@ -174,7 +177,7 @@ export const agentOptions = (
     abortController,
     toolServer,
     allowedTools,
-    systemPrompt,
+    system,
     resume,
     sessionId,
     persistSession,
@@ -191,9 +194,13 @@ export const agentOptions = (
     settingSources: [],
     persistSession,
     ...(resume ? { resume } : sessionId ? { sessionId } : {}),
-    // OpenCode's own system prompt, rendered fresh on every request so a
-    // resumed session never keeps a stale recorded copy.
-    ...(systemPrompt ? { systemPrompt: { type: "custom", prompt: systemPrompt, snapshot: false } } : {}),
+    // Sent on every turn, resumed ones included: without it the Agent SDK uses a
+    // minimal prompt, not Claude Code's. Rendered fresh on every request so a
+    // resumed session never keeps a stale recorded copy of the instructions.
+    systemPrompt:
+      system.type === "claude-code"
+        ? { type: "preset", preset: "claude_code", ...(system.append ? { append: system.append } : {}), snapshot: false }
+        : { type: "custom", prompt: system.text, snapshot: false },
     // Adaptive thinking is the default for these models; "summarized" makes its text
     // visible so it can stream to OpenCode as reasoning.
     ...(showThinking ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
@@ -267,6 +274,15 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
   /** In-flight session-state writes, so the next turn of a session reads what the last one recorded. */
   const sessionWrites = new Map<string, Promise<void>>()
 
+  /** The user's instruction files, or none when they cannot be read: a turn never fails over them. */
+  const readInstructions = async (): Promise<Instructions | undefined> => {
+    if (!options.instructions) return undefined
+    return options.instructions().catch((error: unknown) => {
+      log("instructions.error", { message: error instanceof Error ? error.message : String(error) })
+      return undefined
+    })
+  }
+
   /** Stored state, or none when it cannot be read: a full replay is always correct, just more expensive. */
   const readState = (id: string) =>
     sessions.get(id).catch((error: unknown) => {
@@ -312,6 +328,12 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
     }
 
     const { system, conversation } = splitSystem(body.messages)
+    // Agent turns run on Claude Code's own prompt plus the user's instruction files; OpenCode's agent
+    // prompt is not forwarded. A one-off task (title, compaction) keeps OpenCode's prompt: it is the task.
+    const agentTurn = session.kind === undefined || session.kind === "primary"
+    const instructions = agentTurn ? await readInstructions() : undefined
+    const systemPrompt: SystemPrompt =
+      agentTurn || !system ? { type: "claude-code", append: instructions?.text } : { type: "task", text: system }
     // Only the agent loop's own requests continue a session; titles and compaction are throwaway queries.
     const persist = session.openCodeSessionId !== undefined && session.kind === "primary"
     if (persist) await sessionWrites.get(session.openCodeSessionId!)
@@ -338,7 +360,7 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       run,
       model,
       plans,
-      system,
+      system: systemPrompt,
       showThinking,
       tools,
       toolResultTimeoutMs,
@@ -362,6 +384,14 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       model,
       kind: session.kind ?? null,
       session: plans[0]!.reason,
+      prompt: systemPrompt.type,
+      ...(instructions
+        ? {
+            instructionFiles: instructions.files,
+            ...(instructions.truncated.length > 0 ? { instructionsTruncated: instructions.truncated } : {}),
+            ...(instructions.unreadable.length > 0 ? { instructionsUnreadable: instructions.unreadable } : {}),
+          }
+        : {}),
       thinking: showThinking,
       bridged: tools.map((tool) => tool.openCodeName),
       withheld,
@@ -475,7 +505,8 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       const body = validateCompletionRequest(await readBody(request, maxBodyBytes))
       await handleCompletion(
         response,
-        body,
+        // Removed before anything else reads the messages, so session fingerprints never include them.
+        { ...body, messages: withoutSystemUpdates(body.messages) },
         { openCodeSessionId: header(request, SESSION_HEADER), kind: header(request, KIND_HEADER) },
         () => closed,
       )

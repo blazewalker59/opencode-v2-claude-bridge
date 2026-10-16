@@ -67,6 +67,39 @@ export const textContent = (content: ChatMessage["content"]): string => {
     .join("")
 }
 
+/** OpenCode's wrapper for a mid-session harness notice (instruction or tool-catalog changes), sent inside a user message. Its body is HTML-escaped, so it cannot contain the closing tag. */
+const SYSTEM_UPDATE = /<system-update>\n[\s\S]*?\n<\/system-update>\n*/g
+
+const stripSystemUpdates = (text: string) => text.replace(SYSTEM_UPDATE, "")
+
+/**
+ * Remove OpenCode's `<system-update>` notices from user messages. They are
+ * OpenCode harness instructions, which only OpenCode's own agent prompt
+ * explains; Claude runs on Claude Code's prompt, so it would read them as text
+ * injected into the user's message. A user message left with nothing is dropped.
+ */
+export const withoutSystemUpdates = (messages: ChatMessage[]): ChatMessage[] =>
+  messages.flatMap((message): ChatMessage[] => {
+    if (message.role !== "user") return [message]
+    const { content } = message
+    if (typeof content === "string") {
+      const text = stripSystemUpdates(content)
+      if (text === content) return [message]
+      return text.trim().length > 0 ? [{ ...message, content: text }] : []
+    }
+    if (!content) return [message]
+    let changed = false
+    const parts = content.flatMap((part): ChatContentPart[] => {
+      if ((part.type !== undefined && part.type !== "text") || part.text === undefined) return [part]
+      const text = stripSystemUpdates(part.text)
+      if (text === part.text) return [part]
+      changed = true
+      return text.trim().length > 0 ? [{ ...part, text }] : []
+    })
+    if (!changed) return [message]
+    return parts.length > 0 ? [{ ...message, content: parts }] : []
+  })
+
 /**
  * The tags that give a rendered transcript its structure. Their names end in
  * a random suffix chosen for each prompt, so text inside a message (a file,
