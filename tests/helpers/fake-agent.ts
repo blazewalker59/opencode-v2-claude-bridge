@@ -60,6 +60,10 @@ export const toolUseBlock = (index: number, id: string, name: string, input: unk
   ]
 }
 
+/** A rate_limit_event, as Claude Code reports a usage window's state. */
+export const rateLimitEvent = (info: Record<string, unknown>) =>
+  ({ type: "rate_limit_event", rate_limit_info: info, uuid: randomUUID(), session_id: "fake" }) as unknown as SDKMessage
+
 export const success = () => ({ type: "result", subtype: "success", is_error: false, result: "done" }) as unknown as SDKMessage
 
 export const failure = (errors: string[]) =>

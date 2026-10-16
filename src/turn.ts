@@ -1,5 +1,5 @@
 import type { ServerResponse } from "node:http"
-import type { McpSdkServerConfigWithInstance, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { McpSdkServerConfigWithInstance, SDKMessage, SDKRateLimitInfo, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import {
   type ChatCompletionUsage,
@@ -106,6 +106,8 @@ export type TurnOptions = {
   onDispose: (turn: Turn, reason: string) => void
   /** Called when a plan fails before any output and the next plan is tried. */
   onFallback?: (reason: string) => void
+  /** Called with each rate-limit event Claude Code reports (usage-window status, never content). */
+  onRateLimit?: (info: SDKRateLimitInfo) => void
 }
 
 /**
@@ -147,6 +149,8 @@ export class Turn {
   private emitted = false
   /** The SDK's category for an API error in the current attempt, from its synthetic assistant message. */
   private apiErrorCategory: AgentFailure["category"]
+  /** The latest rate-limit event, so a failure after a spent usage window is reported as such. */
+  private rateLimit: SDKRateLimitInfo | undefined
 
   constructor(private readonly options: TurnOptions) {
     this.toolsByQualifiedName = new Map(options.tools.map((tool) => [tool.qualifiedName, tool]))
@@ -315,6 +319,9 @@ export class Turn {
         if (message.type === "stream_event") {
           // Subagent events belong to an inner tool call, not this response.
           if (message.parent_tool_use_id === null) this.onStreamEvent(message.event)
+        } else if (message.type === "rate_limit_event") {
+          this.rateLimit = message.rate_limit_info
+          this.options.onRateLimit?.(message.rate_limit_info)
         } else if (message.type === "assistant") {
           if (message.error && message.parent_tool_use_id === null) this.apiErrorCategory = message.error
         } else if (message.type === "result") {
@@ -324,7 +331,7 @@ export class Turn {
             // An API error ends a "success" result with is_error set and the API's message as the result.
             const detail =
               message.subtype === "success" ? message.result : `Claude Agent SDK error (${message.subtype}): ${message.errors.join("; ")}`
-            if (this.fail({ message: detail, category: this.apiErrorCategory, status: message.subtype === "success" ? message.api_error_status : undefined })) return
+            if (this.fail({ message: detail, category: this.apiErrorCategory, rateLimit: this.rateLimit, status: message.subtype === "success" ? message.api_error_status : undefined })) return
           }
           this.endInput()
         }
@@ -332,18 +339,18 @@ export class Turn {
       // Claude Code always ends a turn with a result message. Without one the turn was cut off
       // (Claude Code exited, say), so its session must not be recorded as resumable.
       if (!this.terminal && this.status !== "finished") {
-        this.fail({ message: "Claude Code ended the turn without a result." })
+        this.fail({ message: "Claude Code ended the turn without a result.", rateLimit: this.rateLimit })
       }
     } catch (error) {
       if (this.status === "finished") return
-      this.fail({ message: error instanceof Error ? error.message : "Claude Agent SDK failure" })
+      this.fail({ message: error instanceof Error ? error.message : "Claude Agent SDK failure", rateLimit: this.rateLimit })
     }
   }
 
   /** Report a failed attempt, or start the next plan when that can still help (returns true). */
   private fail(failure: AgentFailure): boolean {
     const error = classifyAgentError(failure)
-    const text = explainAgentError(failure.message, error)
+    const text = explainAgentError(failure.message, error, process.env, failure.rateLimit)
     if (this.fallBack(text, error)) return true
     this.events.push({ type: "error", message: text, error })
     return false

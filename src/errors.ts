@@ -1,4 +1,4 @@
-import type { SDKAssistantMessageError } from "@anthropic-ai/claude-agent-sdk"
+import type { SDKAssistantMessageError, SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
 
 /**
  * How the bridge reports a failed turn to OpenCode: an HTTP-style status and
@@ -20,6 +20,8 @@ export type AgentFailure = {
   category?: SDKAssistantMessageError
   /** `api_error_status` on the result message. */
   status?: number | null
+  /** The latest rate-limit event Claude Code reported in this turn, if any. */
+  rateLimit?: SDKRateLimitInfo
 }
 
 const QUOTA = { status: 402, type: "billing_error" }
@@ -70,7 +72,8 @@ const byStatus = (status: number): ErrorClass => {
  * Classify a failed turn. The SDK's category decides, then the API status.
  * The message wording only refines an answer that is missing or generic: the
  * API reports some quota exhaustion as a 400 (invalid request) or a 429 (rate
- * limit), and retrying either cannot help. A clear category or status (a
+ * limit), and retrying either cannot help. A rejected rate-limit event from
+ * Claude Code refines it the same way. A clear category or status (a
  * server error, say) is never overridden by a word in its message.
  */
 export const classifyAgentError = (failure: AgentFailure): ErrorClass => {
@@ -78,6 +81,9 @@ export const classifyAgentError = (failure: AgentFailure): ErrorClass => {
     (failure.category ? BY_CATEGORY[failure.category] : undefined) ??
     (typeof failure.status === "number" ? byStatus(failure.status) : undefined)
   if (reported && reported !== INVALID && reported !== RATE_LIMIT) return reported
+  // Claude Code said the account's usage window is spent: a limit that resets in hours, not a
+  // transient rate limit, so OpenCode must not retry it with backoff.
+  if (failure.rateLimit?.status === "rejected") return QUOTA
   if (QUOTA_TEXT.test(failure.message)) return QUOTA
   if (reported) return reported
   if (AUTH_TEXT.test(failure.message)) return AUTH

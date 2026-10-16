@@ -13,6 +13,7 @@ import {
   messageStart,
   messageStop,
   resultText,
+  rateLimitEvent,
   type Script,
   scriptedRun,
   success,
@@ -844,5 +845,31 @@ test("a response with no usage from Claude carries none", async () => {
       assert.equal(textOf(result), "Hi")
       assert.equal(usageOf(result), undefined)
     },
+  )
+})
+
+test("a rate limit after a rejected usage window reaches OpenCode as quota, with the reset time, and is logged", async () => {
+  const logged: Array<[string, Record<string, unknown>]> = []
+  await withBridge(
+    async function* () {
+      yield rateLimitEvent({ status: "rejected", rateLimitType: "seven_day", resetsAt: 1792170000, utilization: 1 })
+      yield* apiError("API Error: 429 rate_limit_error", "rate_limit", 429)
+    },
+    async ({ port }) => {
+      const result = await post(port, { model, stream: true, messages: [ASK] })
+      const error = (result.events.at(-1) as { error: { message: string; type: string; code: number } }).error
+      assert.deepEqual({ type: error.type, code: error.code }, { type: "billing_error", code: 402 }, "OpenCode must not retry a limit that resets in days")
+      assert.match(error.message, /^API Error: 429 rate_limit_error\n\nClaude usage limit reached \(weekly window\); it resets /)
+      assert.deepEqual(logged.find(([event]) => event === "rate_limit")?.[1], {
+        status: "rejected",
+        window: "seven_day",
+        utilization: 1,
+        resetsAt: 1792170000,
+        overageStatus: null,
+        overageDisabledReason: null,
+        usingOverage: null,
+      })
+    },
+    { log: (event, fields) => logged.push([event, fields ?? {}]) },
   )
 })

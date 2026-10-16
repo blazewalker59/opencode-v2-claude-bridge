@@ -378,6 +378,16 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
         log("turn.end", { kind: session.kind ?? null, reason, completed: owner.completed, stream: owner.streamStats })
       },
       onFallback: (reason) => log("session.fallback", { reason }),
+      onRateLimit: (info) =>
+        log("rate_limit", {
+          status: info.status,
+          window: info.rateLimitType ?? null,
+          utilization: info.utilization ?? null,
+          resetsAt: info.resetsAt ?? null,
+          overageStatus: info.overageStatus ?? null,
+          overageDisabledReason: info.overageDisabledReason ?? null,
+          usingOverage: info.isUsingOverage ?? null,
+        }),
     })
     turns.add(turn)
     // Only the agent loop's turns own session state. A title request shares the session ID, and

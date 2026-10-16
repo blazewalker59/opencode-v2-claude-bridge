@@ -62,3 +62,15 @@ test("other 4xx statuses keep their number", () => {
   assert.deepEqual(classifyAgentError({ message: "API Error", status: 413 }), { status: 413, type: "request_too_large" })
   assert.deepEqual(classifyAgentError({ message: "API Error", status: 408 }), { status: 408, type: "timeout_error" })
 })
+
+test("a failure after Claude Code reported a spent usage window is a quota error, never a retried rate limit", () => {
+  const rejected = { status: "rejected", rateLimitType: "five_hour", resetsAt: 1792170000 } as const
+  assert.equal(classifyAgentError({ message: "API Error: 429 rate limited", category: "rate_limit", rateLimit: rejected }).status, 402)
+  assert.equal(classifyAgentError({ message: "Something unexpected", rateLimit: rejected }).status, 402)
+  assert.equal(
+    classifyAgentError({ message: "API Error: 500", category: "server_error", rateLimit: rejected }).status,
+    500,
+    "a clear server error is not overridden",
+  )
+  assert.equal(classifyAgentError({ message: "API Error: 429 rate limited", category: "rate_limit", rateLimit: { status: "allowed_warning" } }).status, 429)
+})

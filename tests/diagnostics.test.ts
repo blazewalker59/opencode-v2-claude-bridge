@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { explainAgentError, gatewayVariablesSet } from "../src/diagnostics.js"
+import { explainAgentError, formatResetTime, gatewayVariablesSet } from "../src/diagnostics.js"
 
 test("auth errors point to claude login and keep the original text first", () => {
   const text = explainAgentError("Claude Agent SDK error (error_during_execution): Not logged in · Please run /login", undefined, {})
@@ -43,4 +43,18 @@ test("a classified error's status decides the hint, not its wording", () => {
 
 test("a missing executable hint also covers a working directory that has gone", () => {
   assert.match(explainAgentError("spawn /usr/local/bin/claude ENOENT", { status: 400, type: "bridge_error" }, {}), /workingDirectory.*still exists/)
+})
+
+test("a spent usage window is described from Claude Code's own rate-limit event", () => {
+  const text = explainAgentError("API Error: 429", { status: 402, type: "billing_error" }, {}, {
+    status: "rejected",
+    rateLimitType: "five_hour",
+    resetsAt: 1792170000,
+    overageStatus: "rejected",
+    overageDisabledReason: "org_level_disabled",
+  })
+  assert.match(text, /^API Error: 429\n\n/, "the original text comes first")
+  assert.ok(text.includes(`Claude usage limit reached (five-hour window); it resets ${formatResetTime(1792170000)}.`))
+  assert.match(text, /Extra usage is not available \(org_level_disabled\)\./)
+  assert.doesNotMatch(explainAgentError("API Error: 429", undefined, {}, { status: "allowed_warning", utilization: 0.9 }), /usage limit/)
 })
