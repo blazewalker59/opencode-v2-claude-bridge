@@ -25,7 +25,7 @@ test("with OpenCode tools, Claude gets only the bridged tools and nothing auto-a
   assert.deepEqual(options.allowedTools, ["mcp__opencode__read", "mcp__opencode__shell", "mcp__opencode__edit"])
   assert.deepEqual(Object.keys(options.mcpServers ?? {}), ["opencode"])
   assert.equal(options.strictMcpConfig, true, "user MCP configs are ignored")
-  assert.deepEqual(options.settingSources, [], "user/project settings cannot add allow rules or hooks")
+  assert.deepEqual(options.settingSources, ["user"], "only the user's own settings: a repository cannot add hooks or allow rules")
 })
 
 test("without OpenCode tools, Claude answers in text only: nothing runs outside OpenCode", () => {
@@ -36,7 +36,7 @@ test("without OpenCode tools, Claude answers in text only: nothing runs outside 
   assert.equal(options.permissionMode, "dontAsk")
   assert.deepEqual(options.mcpServers, {})
   assert.equal(options.strictMcpConfig, true, "user MCP configs are ignored")
-  assert.deepEqual(options.settingSources, [])
+  assert.deepEqual(options.settingSources, ["user"])
 })
 
 test("session fields map onto the public Agent SDK options", () => {
@@ -69,7 +69,7 @@ test("agent turns run on Claude Code's own prompt; task requests keep their task
 
   const task = agentOptions("/work", { ...base, persistSession: false, system: { type: "task", text: "Write a title." } })
   assert.deepEqual(task.systemPrompt, { type: "custom", prompt: "Write a title.", snapshot: false })
-  assert.deepEqual(task.settingSources, [], "neither kind loads Claude Code settings")
+  assert.deepEqual(task.settingSources, ["user"], "both kinds load only the user's settings")
 })
 
 test("a configured Claude Code executable is passed to the Agent SDK", () => {

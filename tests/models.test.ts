@@ -66,7 +66,7 @@ test("discovery never sends a message, keeps nothing on disk, and always closes 
   assert.deepEqual(seen, {
     cwd: "/work",
     pathToClaudeCodeExecutable: "/opt/claude",
-    settingSources: [],
+    settingSources: ["user"],
     persistSession: false,
     tools: [],
     mcpServers: {},

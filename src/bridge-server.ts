@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { type Options, query } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import type { Instructions } from "./instructions.js"
+import { SETTING_SOURCES } from "./models.js"
 import { type ChatCompletionRequest, type ChatMessage, withoutSystemUpdates } from "./openai.js"
 import {
   fingerprint,
@@ -191,7 +192,7 @@ export const agentOptions = (
     model,
     abortController,
     includePartialMessages: true,
-    settingSources: [],
+    settingSources: SETTING_SOURCES,
     persistSession,
     ...(resume ? { resume } : sessionId ? { sessionId } : {}),
     // Sent on every turn, resumed ones included: without it the Agent SDK uses a

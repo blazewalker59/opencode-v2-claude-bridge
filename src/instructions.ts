@@ -38,7 +38,8 @@ const candidates = async (cwd: string, home: string, configHome: string): Promis
     project.unshift([join(dir, "AGENTS.md"), join(dir, "CLAUDE.md")])
     if ((await exists(join(dir, ".git"))) || dirname(dir) === dir) break
   }
-  return [[join(configHome, "opencode", "AGENTS.md"), join(home, ".claude", "CLAUDE.md")], ...project]
+  // ~/.claude/CLAUDE.md is not a candidate: Claude Code loads it itself with the user's settings.
+  return [[join(configHome, "opencode", "AGENTS.md")], ...project]
 }
 
 /**

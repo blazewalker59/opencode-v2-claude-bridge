@@ -52,11 +52,11 @@ test("AGENTS.md wins over CLAUDE.md in the same directory, as in OpenCode", asyn
   })
 })
 
-test("the global file falls back to ~/.claude/CLAUDE.md and honours XDG_CONFIG_HOME", async () => {
+test("the global file honours XDG_CONFIG_HOME, and ~/.claude/CLAUDE.md is left to Claude Code", async () => {
   await withTree(async ({ home, repo }) => {
     await mkdir(join(home, ".claude"), { recursive: true })
     await writeFile(join(home, ".claude", "CLAUDE.md"), "claude global")
-    assert.deepEqual((await readInstructions(repo, home, {})).files, [join(home, ".claude", "CLAUDE.md")])
+    assert.deepEqual((await readInstructions(repo, home, {})).files, [], "Claude Code loads it with the user's settings")
 
     const xdg = join(home, "xdg")
     await mkdir(join(xdg, "opencode"), { recursive: true })
