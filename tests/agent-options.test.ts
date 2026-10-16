@@ -94,3 +94,9 @@ test("every query keeps the git snapshot out of the prompt and skips claude.ai c
     assert.equal(options.env?.PATH, process.env.PATH, "the Agent SDK replaces the environment, so the inherited one is copied")
   }
 })
+
+test("a reasoning effort reaches the Agent SDK only when one was chosen", () => {
+  const base = { model: "m", abortController: new AbortController(), allowedTools: [], persistSession: false, system: AGENT }
+  assert.equal(agentOptions("/work", { ...base, effort: "high" }).effort, "high")
+  assert.equal("effort" in agentOptions("/work", base), false, "otherwise Claude Code's default applies")
+})

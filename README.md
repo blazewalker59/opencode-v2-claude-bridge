@@ -71,6 +71,8 @@ An unknown option or a malformed value stops the plugin from loading with a mess
 
 The model list comes from your own Claude Code installation. When the plugin loads, it asks Claude Code which models your account can use. The query sends no prompt, so it costs no plan usage. Until that answer arrives (or if it fails), the picker shows the aliases `opus`, `sonnet`, and `haiku`, which always resolve to the current model of each family, or, with a `models` allowlist, exactly the allowlisted IDs. Each entry’s name shows the concrete model, for example `Claude Sonnet · Sonnet 5.5 (Agent SDK)`.
 
+**Reasoning effort:** each model offers one OpenCode variant per effort level Claude Code reports for it (`low`, `medium`, `high`, `xhigh`, `max`). Pick one in the variant picker, or name it, for example `claude-agent-sdk/sonnet#high`. The variant sets `reasoning_effort` on the request and the bridge passes it to the Agent SDK as `effort`. Without a variant, Claude Code's default applies. Title requests ignore it, since they run on `titleModel`. Before discovery answers, the aliases offer every level; Claude Code lowers one a model does not support.
+
 > **Changed in 0.2.0:** earlier builds listed pinned IDs such as `claude-sonnet-4-6`. Re-select a model (for example `claude-agent-sdk/sonnet`) in sessions or configuration that used an old ID.
 
 > **Before choosing `"opencode"`:** OpenCode V2’s base policy *allows* `edit` and `shell` without asking. The bridge never approves anything itself; OpenCode decides. So add OpenCode [`permissions`](https://opencode.ai/v2/docs/permissions) rules that `ask` for (or `deny`) whatever Claude should not do unattended, for example:

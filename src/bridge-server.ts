@@ -1,9 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import { type Options, query } from "@anthropic-ai/claude-agent-sdk"
+import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import type { Instructions } from "./instructions.js"
 import { CHILD_SETTINGS, childEnv, SETTING_SOURCES } from "./claude-code.js"
+import { EFFORT_LEVELS } from "./models.js"
 import { type ChatCompletionRequest, type ChatMessage, withoutSystemUpdates } from "./openai.js"
 import {
   fingerprint,
@@ -183,6 +184,7 @@ export const agentOptions = (
     sessionId,
     persistSession,
     showThinking,
+    effort,
   }: Omit<AgentRunInput, "prompt">,
   claudeExecutable?: string,
 ): Options => {
@@ -207,6 +209,7 @@ export const agentOptions = (
     // Adaptive thinking is the default for these models; "summarized" makes its text
     // visible so it can stream to OpenCode as reasoning.
     ...(showThinking ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
+    ...(effort ? { effort } : {}),
   }
   return {
     ...common,
@@ -345,6 +348,9 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
     // Titles are short; a small model keeps them from costing a large-model query.
     const model = session.kind === "title" && options.titleModel ? options.titleModel : body.model
     const showThinking = (await options.summarizedThinking?.(model)) ?? false
+    // Chosen through a model variant. Titles run on their own small model, so they leave it out.
+    const effort =
+      session.kind !== "title" && EFFORT_LEVELS.includes(body.reasoning_effort as EffortLevel) ? (body.reasoning_effort as EffortLevel) : undefined
     // The bridge may have begun shutting down while this request waited; close() has
     // already disposed the turns it knew about, so this one must never start.
     if (shuttingDown) throw shutdownError()
@@ -365,6 +371,7 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       plans,
       system: systemPrompt,
       showThinking,
+      effort,
       tools,
       toolResultTimeoutMs,
       onToolCall: (id, owner) => {
@@ -398,6 +405,7 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       kind: session.kind ?? null,
       session: plans[0]!.reason,
       prompt: systemPrompt.type,
+      ...(effort ? { effort } : {}),
       ...(instructions
         ? {
             instructionFiles: instructions.files,

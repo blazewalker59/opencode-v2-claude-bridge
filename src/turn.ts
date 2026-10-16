@@ -1,5 +1,5 @@
 import type { ServerResponse } from "node:http"
-import type { McpSdkServerConfigWithInstance, SDKMessage, SDKRateLimitInfo, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { EffortLevel, McpSdkServerConfigWithInstance, SDKMessage, SDKRateLimitInfo, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import {
   type ChatCompletionUsage,
@@ -45,6 +45,8 @@ export type AgentRunInput = {
   persistSession: boolean
   /** Ask for summarized thinking, so it can stream to OpenCode as reasoning. Only for models that support adaptive thinking. */
   showThinking?: boolean
+  /** Reasoning effort chosen through an OpenCode model variant. */
+  effort?: EffortLevel
 }
 
 export type AgentRun = (input: AgentRunInput) => AsyncIterable<SDKMessage>
@@ -99,6 +101,7 @@ export type TurnOptions = {
   plans: RunPlan[]
   system: SystemPrompt
   showThinking?: boolean
+  effort?: EffortLevel
   tools: BridgedTool[]
   toolResultTimeoutMs: number
   /** Called once per tool call OpenCode must answer, so the server can route its result here. */
@@ -188,6 +191,7 @@ export class Turn {
         sessionId: plan.sessionId,
         persistSession: plan.persist,
         showThinking: this.options.showThinking,
+        effort: this.options.effort,
       })
     } catch (error) {
       // Reported like any other failure: as an error chunk, never an exception out of a fallback.

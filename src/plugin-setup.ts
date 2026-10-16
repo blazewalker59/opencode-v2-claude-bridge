@@ -233,6 +233,9 @@ export const setupBridge = async (context: SetupContext, dependencies: SetupDepe
           name: model.name,
           limit: { context: model.context, input: model.context, output: model.output },
           capabilities: { tools: true, input: ["text", "image", "pdf"], output: ["text"] },
+          // One variant per effort level Claude Code reports for the model; the bridge reads
+          // `reasoning_effort` from the request and passes it to the Agent SDK as `effort`.
+          variants: (model.efforts ?? []).map((level) => ({ id: Model.VariantID.make(level), body: { reasoning_effort: level } })),
         })),
       })
     })

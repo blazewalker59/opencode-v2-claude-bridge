@@ -546,3 +546,16 @@ test("an OpenCode system-update notice never reaches Claude, and does not break 
     assert.equal(prompts[1], "Tell me a joke")
   })
 })
+
+test("a variant's reasoning_effort reaches the turn; unknown values and title requests leave it out", async () => {
+  await withBridge(replying, async ({ port, runs }) => {
+    const ask: ChatMessage[] = [SYSTEM, { role: "user", content: "Hi" }]
+    await post(port, { model, stream: true, messages: ask, reasoning_effort: "max" }, primary("ses_effort"))
+    await post(port, { model, stream: true, messages: ask, reasoning_effort: "minimal" }, primary("ses_other"))
+    await post(port, { model, stream: true, messages: ask, reasoning_effort: "high" }, { [SESSION_HEADER]: "ses_effort", [KIND_HEADER]: "title" })
+    assert.deepEqual(
+      runs.map((run) => run.effort),
+      ["max", undefined, undefined],
+    )
+  })
+})

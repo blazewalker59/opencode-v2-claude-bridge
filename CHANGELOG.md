@@ -16,6 +16,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - A failure after Claude Code reports a spent usage window is reported to OpenCode as quota (402, not retried), naming the window and its reset time, and whether extra usage is available. The debug log records rate-limit events as `rate_limit`.
 - A stalled response stream no longer loses the answer: Claude Code's non-streaming retry is delivered (text, tool calls, usage) and the stalled stream's unfinished tool calls are dropped. Previously its tool calls never reached OpenCode and the turn failed after waiting for them.
 - Tool calls pair with their MCP requests by the `tool_use` ID Claude Code stamps on each request, so identical parallel calls always get their own results. Requests without the ID still pair by tool name and arguments.
+- Reasoning effort: each model gets one OpenCode variant per effort level Claude Code reports (`low` to `max`), for example `claude-agent-sdk/sonnet#high`. The variant sets `reasoning_effort`, which the bridge passes to the Agent SDK as `effort`; the debug log's `turn.start` records it.
 
 ### Changed
 

@@ -29,6 +29,8 @@ export type ChatCompletionRequest = {
   /** Validated by the tool bridge; OpenCode sends OpenAI function tool definitions. */
   tools?: unknown
   tool_choice?: unknown
+  /** Set by the plugin's model variants; one of the Agent SDK's effort levels, or ignored. */
+  reasoning_effort?: unknown
 }
 
 export type ChatCompletionToolCallDelta = {

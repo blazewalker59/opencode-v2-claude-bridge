@@ -115,3 +115,19 @@ test("unloading the plugin cancels discovery and closes the query", async () => 
   await assert.rejects(discovery, /cancelled/)
   assert.equal(closed, 1)
 })
+
+test("a model's effort levels come from Claude Code, keeping only levels the Agent SDK accepts", () => {
+  const catalog = toCatalog([
+    { value: "opus", displayName: "Opus", description: "Opus", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+    { value: "sonnet", displayName: "Sonnet", description: "Sonnet", supportedEffortLevels: ["low", "turbo" as "low"] },
+    { value: "haiku", displayName: "Haiku", description: "Haiku" },
+  ])
+  assert.deepEqual(
+    catalog.map((model) => [model.id, model.efforts]),
+    [
+      ["opus", ["low", "medium", "high", "xhigh", "max"]],
+      ["sonnet", ["low"]],
+      ["haiku", undefined],
+    ],
+  )
+})

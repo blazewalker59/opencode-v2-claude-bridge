@@ -24,7 +24,7 @@ type ModelRequest = { headers: Record<string, string>; sessionID: string; kind: 
 const fakeOpenCode = (options: Record<string, unknown> = {}, overrides: { hookDispose?: () => Promise<void>; transformFails?: boolean } = {}) => {
   const hooks: Array<(request: ModelRequest) => void> = []
   const disposed: string[] = []
-  const added: Array<{ info: { settings: { baseURL: string } }; models: Array<{ id: string; name: string }> }> = []
+  const added: Array<{ info: { settings: { baseURL: string } }; models: Array<{ id: string; name: string; variants?: Array<{ id: string; body?: Record<string, unknown> }> }> }> = []
   const transforms: Array<(editor: unknown) => void> = []
   const editor = { add: (input: (typeof added)[number]) => added.push(input) }
   let reloads = 0
@@ -71,6 +71,9 @@ const fakeOpenCode = (options: Record<string, unknown> = {}, overrides: { hookDi
     },
     get models() {
       return added.at(-1)!.models.map((model) => [String(model.id), model.name])
+    },
+    get variants() {
+      return Object.fromEntries(added.at(-1)!.models.map((model) => [String(model.id), model.variants ?? []]))
     },
   }
 }
@@ -192,4 +195,21 @@ test("a bad debug-log variable only warns, but a bad debugLog option stops the p
     setupBridge(fakeOpenCode({ debugLog: "/nonexistent-dir/bridge.log" }).context, quietDiscovery(Promise.resolve(MODELS))),
     /Cannot write the debug log/,
   )
+})
+
+test("each effort level Claude Code reports for a model becomes an OpenCode variant that sets reasoning_effort", async () => {
+  const openCode = fakeOpenCode()
+  const models: ModelInfo[] = [
+    { value: "sonnet", displayName: "Sonnet", description: "Sonnet 5.5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+    { value: "haiku", displayName: "Haiku", description: "Haiku 5.5" },
+  ]
+  const teardown = await setupBridge(openCode.context, quietDiscovery(Promise.resolve(models)))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await teardown()
+  assert.deepEqual(openCode.variants.sonnet, [
+    { id: "low", body: { reasoning_effort: "low" } },
+    { id: "medium", body: { reasoning_effort: "medium" } },
+    { id: "high", body: { reasoning_effort: "high" } },
+  ])
+  assert.deepEqual(openCode.variants.haiku, [], "no variants for a model without effort levels")
 })
