@@ -559,3 +559,17 @@ test("a variant's reasoning_effort reaches the turn; unknown values and title re
     )
   })
 })
+
+test("with claudeDebugDir, each query gets its own Claude Code debug file, named by a plain request kind", async () => {
+  await withBridge(
+    replying,
+    async ({ port, runs }) => {
+      const ask: ChatMessage[] = [SYSTEM, { role: "user", content: "Hi" }]
+      await post(port, { model, stream: true, messages: ask }, primary("ses_a"))
+      await post(port, { model, stream: true, messages: ask }, { [SESSION_HEADER]: "ses_b", [KIND_HEADER]: "../../etc" })
+      assert.match(runs[0]?.debugFile ?? "", /^\/logs\/claude\/[0-9T-]+Z-primary-1\.log$/)
+      assert.match(runs[1]?.debugFile ?? "", /^\/logs\/claude\/[0-9T-]+Z-request-2\.log$/, "a header cannot steer the file path")
+    },
+    { claudeDebugDir: "/logs/claude" },
+  )
+})

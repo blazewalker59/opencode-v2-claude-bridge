@@ -56,6 +56,7 @@ Plugin options go in the object form of the plugin entry:
 | `titleModel` | `"haiku"` | Model used for OpenCode’s session-title requests, so titles don’t cost a large-model query. |
 | `claudeExecutable` | Agent SDK default | Absolute path to the Claude Code executable, for unusual installations. |
 | `debugLog` | off | Absolute path for the debug log (metadata and error messages, never message content; see **Troubleshooting**). `OPENCODE_CLAUDE_BRIDGE_DEBUG_LOG` also works. |
+| `claudeDebugDir` | off | Absolute directory for Claude Code's own debug log, one file per query (`<time>-<kind>-<n>.log`), for problems the bridge's `debugLog` cannot explain. Created readable only by you. Unlike `debugLog`, these logs come from Claude Code and may include request details and content; turn it off when you are done. |
 | `workingDirectory` | the OpenCode project | Directory Claude Code runs in. A relative path resolves against each project, so one global setting such as `"packages/api"` or `".."` applies everywhere; an absolute path is used as given. It must exist when the plugin loads. See below. |
 
 An unknown option or a malformed value stops the plugin from loading with a message naming the option. Nothing is silently ignored or widened.

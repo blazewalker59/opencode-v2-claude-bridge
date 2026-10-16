@@ -1,4 +1,4 @@
-import { statSync } from "node:fs"
+import { chmodSync, mkdirSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute } from "node:path"
 import { Model, type Plugin, Provider } from "@opencode/plugin"
@@ -50,6 +50,21 @@ const isDirectory = (path: string): boolean => {
   } catch {
     return false
   }
+}
+
+/**
+ * The Claude Code debug directory, created readable only by you. Its logs can
+ * contain message content. A directory that cannot be created stops the plugin
+ * from loading, naming it, as a bad `debugLog` does.
+ */
+const prepareDebugDir = (dir: string): string => {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    chmodSync(dir, 0o700)
+  } catch (error) {
+    throw new Error(`Plugin option claudeDebugDir: cannot use ${dir}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return dir
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -152,6 +167,7 @@ export const setupBridge = async (context: SetupContext, dependencies: SetupDepe
     sessions,
     titleModel: options.titleModel,
     claudeExecutable: options.claudeExecutable,
+    claudeDebugDir: options.claudeDebugDir && prepareDebugDir(options.claudeDebugDir),
     // Found from the OpenCode project, as OpenCode finds them, whatever directory Claude Code runs in.
     instructions: () => readInstructions(context.location.directory, dependencies.home ?? homedir(), env),
     // The first request can arrive before discovery answers; wait briefly for it.

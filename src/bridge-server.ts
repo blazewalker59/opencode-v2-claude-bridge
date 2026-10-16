@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import { join } from "node:path"
 import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import type { Instructions } from "./instructions.js"
@@ -43,6 +44,8 @@ export type BridgeServerOptions = {
   titleModel?: string
   /** Path to the Claude Code executable, when it is not where the Agent SDK looks. */
   claudeExecutable?: string
+  /** Directory for Claude Code's own debug log, one file per query. Opt-in: these logs can contain message content. */
+  claudeDebugDir?: string
   /** The user's instruction files for agent turns, read on every turn. Defaults to none. */
   instructions?: () => Promise<Instructions>
   /** Whether to show summarized thinking for a model (true only for models known to support adaptive thinking). */
@@ -185,6 +188,7 @@ export const agentOptions = (
     persistSession,
     showThinking,
     effort,
+    debugFile,
   }: Omit<AgentRunInput, "prompt">,
   claudeExecutable?: string,
 ): Options => {
@@ -210,6 +214,7 @@ export const agentOptions = (
     // visible so it can stream to OpenCode as reasoning.
     ...(showThinking ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
     ...(effort ? { effort } : {}),
+    ...(debugFile ? { debug: true, debugFile } : {}),
   }
   return {
     ...common,
@@ -267,6 +272,8 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
   const token = options.token ?? randomBytes(32).toString("base64url")
   /** Set by close(): requests still in flight must not start or continue a Claude turn. */
   let shuttingDown = false
+  /** Numbers each query's Claude Code debug file. */
+  let queries = 0
   let closing: Promise<void> | undefined
   const shutdownError = () => new BridgeRequestError(503, "The OpenCode bridge is shutting down")
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
@@ -351,6 +358,10 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
     // Chosen through a model variant. Titles run on their own small model, so they leave it out.
     const effort =
       session.kind !== "title" && EFFORT_LEVELS.includes(body.reasoning_effort as EffortLevel) ? (body.reasoning_effort as EffortLevel) : undefined
+    // One Claude Code debug file per query; the kind comes from a request header, so only a plain word names the file.
+    const debugFile = options.claudeDebugDir
+      ? join(options.claudeDebugDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${/^[a-z]{1,20}$/.test(session.kind ?? "") ? session.kind : "request"}-${++queries}.log`)
+      : undefined
     // The bridge may have begun shutting down while this request waited; close() has
     // already disposed the turns it knew about, so this one must never start.
     if (shuttingDown) throw shutdownError()
@@ -372,6 +383,7 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       system: systemPrompt,
       showThinking,
       effort,
+      debugFile,
       tools,
       toolResultTimeoutMs,
       onToolCall: (id, owner) => {
@@ -406,6 +418,7 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       session: plans[0]!.reason,
       prompt: systemPrompt.type,
       ...(effort ? { effort } : {}),
+      ...(debugFile ? { claudeDebugFile: debugFile } : {}),
       ...(instructions
         ? {
             instructionFiles: instructions.files,

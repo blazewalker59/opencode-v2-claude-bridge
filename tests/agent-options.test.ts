@@ -100,3 +100,11 @@ test("a reasoning effort reaches the Agent SDK only when one was chosen", () => 
   assert.equal(agentOptions("/work", { ...base, effort: "high" }).effort, "high")
   assert.equal("effort" in agentOptions("/work", base), false, "otherwise Claude Code's default applies")
 })
+
+test("Claude Code's own debug log is written only when a file is given", () => {
+  const base = { model: "m", abortController: new AbortController(), allowedTools: [], persistSession: false, system: AGENT }
+  const on = agentOptions("/work", { ...base, debugFile: "/logs/q.log" })
+  assert.deepEqual([on.debug, on.debugFile], [true, "/logs/q.log"])
+  const off = agentOptions("/work", base)
+  assert.equal("debug" in off || "debugFile" in off, false)
+})

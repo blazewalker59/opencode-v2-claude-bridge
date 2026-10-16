@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -212,4 +212,21 @@ test("each effort level Claude Code reports for a model becomes an OpenCode vari
     { id: "high", body: { reasoning_effort: "high" } },
   ])
   assert.deepEqual(openCode.variants.haiku, [], "no variants for a model without effort levels")
+})
+
+test("claudeDebugDir is created readable only by you, and an unusable one stops the plugin", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocb-cc-debug-"))
+  try {
+    const target = join(dir, "nested", "claude")
+    const teardown = await setupBridge(fakeOpenCode({ claudeDebugDir: target }).context, quietDiscovery(Promise.resolve(MODELS)))
+    await teardown()
+    assert.equal(statSync(target).mode & 0o777, 0o700)
+    writeFileSync(join(dir, "file"), "")
+    await assert.rejects(
+      setupBridge(fakeOpenCode({ claudeDebugDir: join(dir, "file", "sub") }).context, quietDiscovery(Promise.resolve(MODELS))),
+      /claudeDebugDir: cannot use/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

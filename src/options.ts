@@ -13,9 +13,11 @@ export type BridgePluginOptions = {
   debugLog?: string
   /** Directory Claude Code runs in, absolute or relative to the OpenCode project. Defaults to the project. */
   workingDirectory?: string
+  /** Directory for Claude Code's own debug log, one file per query. Off by default: these logs can contain message content. */
+  claudeDebugDir?: string
 }
 
-const KEYS = ["toolPolicy", "models", "titleModel", "claudeExecutable", "debugLog", "workingDirectory"] as const
+const KEYS = ["toolPolicy", "models", "titleModel", "claudeExecutable", "debugLog", "workingDirectory", "claudeDebugDir"] as const
 
 const nonEmptyString = (key: string, value: unknown): string => {
   if (typeof value !== "string" || value.trim().length === 0) throw new Error(`Plugin option ${key} must be a non-empty string`)
@@ -59,6 +61,7 @@ export const parsePluginOptions = (raw: Readonly<Record<string, unknown>> | unde
     debugLog: options.debugLog === undefined ? undefined : absolutePath("debugLog", options.debugLog),
     workingDirectory:
       options.workingDirectory === undefined ? undefined : nonEmptyString("workingDirectory", options.workingDirectory),
+    claudeDebugDir: options.claudeDebugDir === undefined ? undefined : absolutePath("claudeDebugDir", options.claudeDebugDir),
   }
 }
 

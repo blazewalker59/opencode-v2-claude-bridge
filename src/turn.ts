@@ -47,6 +47,8 @@ export type AgentRunInput = {
   showThinking?: boolean
   /** Reasoning effort chosen through an OpenCode model variant. */
   effort?: EffortLevel
+  /** Write Claude Code's own debug log for this query here (opt-in). */
+  debugFile?: string
 }
 
 export type AgentRun = (input: AgentRunInput) => AsyncIterable<SDKMessage>
@@ -102,6 +104,7 @@ export type TurnOptions = {
   system: SystemPrompt
   showThinking?: boolean
   effort?: EffortLevel
+  debugFile?: string
   tools: BridgedTool[]
   toolResultTimeoutMs: number
   /** Called once per tool call OpenCode must answer, so the server can route its result here. */
@@ -192,6 +195,7 @@ export class Turn {
         persistSession: plan.persist,
         showThinking: this.options.showThinking,
         effort: this.options.effort,
+        debugFile: this.options.debugFile,
       })
     } catch (error) {
       // Reported like any other failure: as an error chunk, never an exception out of a fallback.
