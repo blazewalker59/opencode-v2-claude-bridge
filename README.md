@@ -155,6 +155,23 @@ npm test
 
 Point at `dist/`, not the repository root: OpenCode loads a local directory from its `index.js` and ignores `package.json`. OpenCode 2.0.21 also cannot install this plugin from a Git URL (see **Compatibility**).
 
+### Let Claude edit files and run commands
+
+By default Claude can only read: the bridge gives it OpenCode's `read`, `glob`, `grep` and `question` tools, and withholds the rest. To let it edit and write files, run shell commands, and use OpenCode's other tools, set `toolPolicy` to `"opencode"` in the plugin entry, then restart OpenCode:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "file:/Users/YOUR_USERNAME/.local/share/opencode/plugins/opencode-v2-claude-bridge-X.Y.Z.tgz",
+      "options": { "toolPolicy": "opencode" }
+    }
+  ]
+}
+```
+
+OpenCode still executes every tool call under its own permission rules and agent modes, so the approvals you have configured in OpenCode keep applying. The full list of tools each policy allows is under **Configuration**.
+
 ### Upgrade
 
 Read [CHANGELOG.md](CHANGELOG.md) first; changes marked **Breaking** may need configuration edits, such as renamed model IDs.
