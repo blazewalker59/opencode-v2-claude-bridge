@@ -6,6 +6,7 @@ import { agentOptions, type AgentRunInput, type BridgeServerOptions, startBridge
 import type { ChatMessage } from "../src/openai.js"
 import {
   apiError,
+  assistantMessage,
   deferred,
   failure,
   isErrorResult,
@@ -14,6 +15,7 @@ import {
   messageStop,
   resultText,
   rateLimitEvent,
+  streamEvent,
   type Script,
   scriptedRun,
   success,
@@ -871,5 +873,63 @@ test("a rate limit after a rejected usage window reaches OpenCode as quota, with
       })
     },
     { log: (event, fields) => logged.push([event, fields ?? {}]) },
+  )
+})
+
+test("after a stalled stream, Claude Code's non-streaming retry delivers its text, tool calls and usage", async () => {
+  await withBridge(
+    async function* ({ client }) {
+      // The stream stalls inside a tool call: Claude Code abandons it and asks again without streaming.
+      yield messageStart({ input_tokens: 5, output_tokens: 1 }, "msg_stalled")
+      yield* textBlock(0, "Let me ")
+      yield streamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_dead", name: "mcp__opencode__read", input: {} } })
+      yield assistantMessage(
+        "msg_retry",
+        [
+          { type: "text", text: "Reading it now." },
+          { type: "tool_use", id: "toolu_1", name: "mcp__opencode__read", input: { filePath: "src/a.ts" } },
+        ],
+        { input_tokens: 5, output_tokens: 30, cache_read_input_tokens: 100 },
+      )
+      const result = await client!.callTool(read("src/a.ts"))
+      yield messageStart({ input_tokens: 8, output_tokens: 1 }, "msg_next")
+      yield* textBlock(0, `It says: ${resultText(result)}`)
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      const first = await post(port, { model, stream: true, messages: [ASK], tools: TOOLS })
+      assert.deepEqual(timelineOf(first), ["text:Let me ", "text:Reading it now.", "tool:read", "finish:tool_calls"])
+      assert.deepEqual(toolCallsOf(first).map((call) => call.id), ["toolu_1"], "the stalled stream's unfinished call is dropped")
+      assert.equal(usageOf(first)?.completion_tokens, 30)
+      const second = await post(port, {
+        model,
+        stream: true,
+        tools: TOOLS,
+        messages: [ASK, assistantToolCalls(first), toolMessage("toolu_1", "export const a = 1")],
+      })
+      assert.equal(textOf(second), "It says: export const a = 1")
+    },
+  )
+})
+
+test("a complete assistant message for a message already streamed is not delivered twice", async () => {
+  await withBridge(
+    async function* () {
+      yield messageStart(undefined, "msg_1")
+      yield* textBlock(0, "Hello")
+      // Seen in recorded streams: the whole message can arrive before the stream's last frames.
+      yield assistantMessage("msg_1", [{ type: "text", text: "Hello" }])
+      yield messageStop()
+      // And a message delivered whole first must not repeat when its stream follows.
+      yield assistantMessage("msg_2", [{ type: "text", text: " world" }])
+      yield messageStart(undefined, "msg_2")
+      yield* textBlock(0, " world")
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      assert.equal(textOf(await post(port, { model, stream: true, messages: [ASK] })), "Hello world")
+    },
   )
 })

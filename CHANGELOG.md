@@ -14,6 +14,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - Claude Code runs with your user settings (`~/.claude/settings.json`, `settingSources: ["user"]`), so its `env` (for example an API gateway), user-level hooks and `~/.claude/CLAUDE.md` apply to bridge requests as they do in Claude Code. Project and local Claude Code settings are still not loaded.
 - Responses report token usage (input including cache reads and writes, and output) in the OpenAI `usage` field, so OpenCode's context meter, cost display and automatic compaction see real numbers. Claude Code's own auto-compaction is turned off for bridge queries so it never rewrites its copy of a conversation OpenCode owns.
 - A failure after Claude Code reports a spent usage window is reported to OpenCode as quota (402, not retried), naming the window and its reset time, and whether extra usage is available. The debug log records rate-limit events as `rate_limit`.
+- A stalled response stream no longer loses the answer: Claude Code's non-streaming retry is delivered (text, tool calls, usage) and the stalled stream's unfinished tool calls are dropped. Previously its tool calls never reached OpenCode and the turn failed after waiting for them.
 
 ### Changed
 

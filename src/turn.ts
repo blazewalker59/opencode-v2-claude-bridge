@@ -140,6 +140,12 @@ export class Turn {
   private messageToolCalls: string[] = []
   /** Token usage of the Claude message being streamed. */
   private messageUsage: MessageUsage | undefined
+  /** IDs of Claude messages already delivered, by stream or whole. */
+  private readonly delivered = new Set<string>()
+  /** True between a message_start and its message_stop. */
+  private streamOpen = false
+  /** True while the stream repeats a message already delivered whole. */
+  private skipping = false
   private terminal = false
   /** Why the turn was disposed, reported if that cut a response short. */
   private disposeReason: string | undefined
@@ -323,7 +329,9 @@ export class Turn {
           this.rateLimit = message.rate_limit_info
           this.options.onRateLimit?.(message.rate_limit_info)
         } else if (message.type === "assistant") {
-          if (message.error && message.parent_tool_use_id === null) this.apiErrorCategory = message.error
+          if (message.parent_tool_use_id !== null) continue
+          if (message.error) this.apiErrorCategory = message.error
+          else this.onAssistantMessage(message.message as unknown as Parameters<Turn["onAssistantMessage"]>[0])
         } else if (message.type === "result") {
           this.terminal = true
           if (message.subtype === "success" && !message.is_error) this.events.push({ type: "done" })
@@ -361,8 +369,15 @@ export class Turn {
       event.type === "content_block_delta" ? event.delta.type : event.type === "content_block_start" ? `start:${event.content_block.type}` : undefined
     if (kind) this.streamStats[kind] = (this.streamStats[kind] ?? 0) + 1
     if (event.type === "message_start") {
+      const id = (event.message as { id?: string } | undefined)?.id
+      // Already delivered whole (see onAssistantMessage): its stream must not repeat it.
+      this.skipping = id !== undefined && this.delivered.has(id)
+      if (this.skipping) return
+      if (id) this.delivered.add(id)
+      // A stream still open here was abandoned by Claude Code; its unfinished tool calls were never sent.
       this.blocks.clear()
       this.messageToolCalls = []
+      this.streamOpen = true
       // Read defensively: a frame without usage must not end the turn.
       const usage = (event.message as { usage?: Partial<typeof event.message.usage> } | undefined)?.usage
       this.messageUsage = usage
@@ -373,6 +388,8 @@ export class Turn {
             output: usage.output_tokens ?? 0,
           }
         : undefined
+    } else if (this.skipping) {
+      if (event.type === "message_stop") this.skipping = false
     } else if (event.type === "message_delta") {
       // Output counts in message_delta are cumulative for the message.
       const output = (event as { usage?: { output_tokens?: number } }).usage?.output_tokens
@@ -393,12 +410,52 @@ export class Turn {
       this.blocks.delete(event.index)
       if (block) this.completeToolUse(block)
     } else if (event.type === "message_stop") {
-      // Queued before the batch's end, so it lands in the response this message belongs to.
-      if (this.messageUsage) this.events.push({ type: "usage", usage: this.messageUsage })
-      this.messageUsage = undefined
-      if (this.messageToolCalls.length > 0) this.events.push({ type: "tool_calls_end", ids: this.messageToolCalls })
-      this.messageToolCalls = []
+      this.endMessage()
     }
+  }
+
+  /** A Claude message is complete: report its usage, then hand its tool calls to OpenCode. */
+  private endMessage() {
+    this.streamOpen = false
+    // Queued before the batch's end, so it lands in the response this message belongs to.
+    if (this.messageUsage) this.events.push({ type: "usage", usage: this.messageUsage })
+    this.messageUsage = undefined
+    if (this.messageToolCalls.length > 0) this.events.push({ type: "tool_calls_end", ids: this.messageToolCalls })
+    this.messageToolCalls = []
+  }
+
+  /**
+   * A complete assistant message. One the stream already delivered (same ID,
+   * which can arrive before its last content_block_stop) is ignored. One with a
+   * new ID is Claude Code's non-streaming retry after a stalled stream: it has
+   * no stream events of its own, so its text, tool calls and usage are delivered
+   * from here, and the stalled stream's unfinished tool calls are dropped.
+   * Text the stalled stream already sent to OpenCode cannot be withdrawn.
+   */
+  private onAssistantMessage(message: { id?: string; model?: string; content?: unknown; usage?: Record<string, number | null | undefined> }) {
+    // Claude Code's own failure notices are reports, not model output.
+    if (message.model === "<synthetic>" || !message.id || this.delivered.has(message.id)) return
+    this.delivered.add(message.id)
+    this.blocks.clear()
+    this.messageToolCalls = []
+    const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : []
+    for (const block of content) {
+      if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) this.emit({ type: "text", text: block.text })
+      else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.length > 0) this.emit({ type: "reasoning", text: block.thinking })
+      else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        this.completeToolUse({ id: block.id, name: block.name, json: JSON.stringify(block.input ?? {}) })
+      }
+    }
+    const usage = message.usage
+    this.messageUsage = usage
+      ? {
+          input: usage.input_tokens ?? 0,
+          cacheRead: usage.cache_read_input_tokens ?? 0,
+          cacheWrite: usage.cache_creation_input_tokens ?? 0,
+          output: usage.output_tokens ?? 0,
+        }
+      : undefined
+    this.endMessage()
   }
 
   private completeToolUse(block: StreamingToolUse) {

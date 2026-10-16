@@ -32,12 +32,23 @@ export const scriptedRun =
     }
   }
 
-const streamEvent = (event: unknown) =>
+export const streamEvent = (event: unknown) =>
   ({ type: "stream_event", event, parent_tool_use_id: null, uuid: randomUUID(), session_id: "fake" }) as unknown as SDKMessage
 
 /** A message_start frame; pass usage to report token counts as the API does. */
-export const messageStart = (usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }) =>
-  streamEvent({ type: "message_start", message: usage ? { usage } : {} })
+type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+export const messageStart = (usage?: Usage, id?: string) =>
+  streamEvent({ type: "message_start", message: { ...(id ? { id } : {}), ...(usage ? { usage } : {}) } })
+
+/** The complete assistant message the SDK yields alongside (or, after a stalled stream, instead of) the stream events. */
+export const assistantMessage = (id: string, content: unknown[], usage?: Usage) =>
+  ({
+    type: "assistant",
+    message: { id, role: "assistant", model: "claude-test", content, ...(usage ? { usage } : {}) },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+    session_id: "fake",
+  }) as unknown as SDKMessage
 /** A message_delta frame with the message's cumulative output count. */
 export const messageDelta = (outputTokens: number) => streamEvent({ type: "message_delta", delta: { stop_reason: null }, usage: { output_tokens: outputTokens } })
 export const messageStop = () => streamEvent({ type: "message_stop" })
