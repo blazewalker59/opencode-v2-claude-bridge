@@ -42,6 +42,9 @@ export const textOf = (result: SseResult) => chunks(result).map((chunk) => chunk
 export const toolCallsOf = (result: SseResult) =>
   chunks(result).flatMap((chunk) => chunk.choices[0]?.delta.tool_calls ?? [])
 
+/** The `usage` OpenCode reads from a response: the last one any chunk carried. */
+export const usageOf = (result: SseResult) => chunks(result).flatMap((chunk) => (chunk.usage ? [chunk.usage] : [])).at(-1)
+
 export const finishReasonsOf = (result: SseResult) =>
   chunks(result)
     .map((chunk) => chunk.choices[0]?.finish_reason)

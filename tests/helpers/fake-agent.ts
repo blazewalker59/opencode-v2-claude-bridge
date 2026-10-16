@@ -35,7 +35,11 @@ export const scriptedRun =
 const streamEvent = (event: unknown) =>
   ({ type: "stream_event", event, parent_tool_use_id: null, uuid: randomUUID(), session_id: "fake" }) as unknown as SDKMessage
 
-export const messageStart = () => streamEvent({ type: "message_start", message: {} })
+/** A message_start frame; pass usage to report token counts as the API does. */
+export const messageStart = (usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }) =>
+  streamEvent({ type: "message_start", message: usage ? { usage } : {} })
+/** A message_delta frame with the message's cumulative output count. */
+export const messageDelta = (outputTokens: number) => streamEvent({ type: "message_delta", delta: { stop_reason: null }, usage: { output_tokens: outputTokens } })
 export const messageStop = () => streamEvent({ type: "message_stop" })
 
 export const textBlock = (index: number, text: string) => [

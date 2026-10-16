@@ -27,8 +27,12 @@ export const CHILD_SETTINGS = { includeGitInstructions: false } satisfies Option
  * claude.ai connectors, a path `strictMcpConfig` does not cover. Claude could
  * never call them (only bridged OpenCode tools are allowed), so they would only
  * add tool definitions and a network round trip to every query.
+ *
+ * `DISABLE_AUTO_COMPACT=1`: OpenCode owns the conversation and compacts it from
+ * the token usage the bridge reports. If Claude Code also compacted its copy,
+ * the two histories would differ in a way session fingerprints cannot detect.
  */
-const CHILD_VARIABLES: Record<string, string> = { ENABLE_CLAUDEAI_MCP_SERVERS: "0" }
+const CHILD_VARIABLES: Record<string, string> = { ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }
 
 /** The environment for a Claude Code child. The Agent SDK replaces, not merges, the environment, so the inherited one is copied. */
 export const childEnv = (env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> => ({ ...env, ...CHILD_VARIABLES })

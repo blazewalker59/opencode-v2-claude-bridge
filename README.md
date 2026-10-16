@@ -22,7 +22,8 @@ Each OpenCode session is backed by a persisted Agent SDK session. The plugin tag
 - **If the stored mapping cannot be read**, the bridge replays instead of failing the turn.
 - **Title and compaction requests** run as throwaway queries (`persistSession: false`) and never touch the mapping.
 - **A cancelled or failed turn** is never resumed; the next message replays. A turn cut short (OpenCode shutting down, or a newer message replacing it) ends its response with an error, so OpenCode never records a partial answer as complete.
-- **System prompt:** OpenCode’s system prompt is passed as the Agent SDK system prompt and re-rendered on every request (`snapshot: false`), so a resumed session always uses OpenCode’s current prompt.
+- **System prompt:** Claude Code’s prompt plus your instruction files (see **System prompt**), re-rendered on every request (`snapshot: false`), so a resumed session always uses the current files.
+- **Token usage:** each response reports the token usage of its Claude message (input with cache reads and writes, and output), so OpenCode’s context meter and its automatic compaction work. Claude Code’s own auto-compaction is off (`DISABLE_AUTO_COMPACT=1`): OpenCode owns the conversation, and a copy compacted behind its back would no longer match it.
 
 Agent SDK session transcripts are stored by Claude Code under `~/.claude/projects/`, as for any Agent SDK session.
 

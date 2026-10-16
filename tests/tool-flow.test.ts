@@ -9,6 +9,7 @@ import {
   deferred,
   failure,
   isErrorResult,
+  messageDelta,
   messageStart,
   messageStop,
   resultText,
@@ -30,6 +31,7 @@ import {
   timelineOf,
   toolCallsOf,
   toolMessage,
+  usageOf,
 } from "./helpers/http.js"
 
 const model = "claude-sonnet-4-6"
@@ -788,6 +790,59 @@ test("tool results on a request that drops are not delivered, so OpenCode's retr
       })
       const retry = await post(port, results)
       assert.equal(textOf(retry), "It says: export {}")
+    },
+  )
+})
+
+test("each response reports its Claude message's token usage, with cached input counted in the prompt", async () => {
+  await withBridge(
+    async function* ({ client }) {
+      yield messageStart({ input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 3000, cache_creation_input_tokens: 500 })
+      yield* toolUseBlock(0, "toolu_1", "mcp__opencode__read", { filePath: "src/a.ts" })
+      yield messageDelta(40)
+      yield messageStop()
+      await client!.callTool(read("src/a.ts"))
+      yield messageStart({ input_tokens: 25, output_tokens: 1, cache_read_input_tokens: 3500, cache_creation_input_tokens: 60 })
+      yield* textBlock(0, "Done.")
+      yield messageDelta(7)
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      const first = await post(port, { model, stream: true, messages: [ASK], tools: TOOLS })
+      assert.deepEqual(usageOf(first), {
+        prompt_tokens: 3510,
+        completion_tokens: 40,
+        total_tokens: 3550,
+        prompt_tokens_details: { cached_tokens: 3000, cache_write_tokens: 500 },
+      })
+      const second = await post(port, {
+        model,
+        stream: true,
+        tools: TOOLS,
+        messages: [ASK, assistantToolCalls(first), toolMessage("toolu_1", "x")],
+      })
+      assert.deepEqual(
+        usageOf(second),
+        { prompt_tokens: 3585, completion_tokens: 7, total_tokens: 3592, prompt_tokens_details: { cached_tokens: 3500, cache_write_tokens: 60 } },
+        "the continuation reports its own message, not the turn's running total",
+      )
+    },
+  )
+})
+
+test("a response with no usage from Claude carries none", async () => {
+  await withBridge(
+    async function* () {
+      yield messageStart()
+      yield* textBlock(0, "Hi")
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      const result = await post(port, { model, stream: true, messages: [ASK] })
+      assert.equal(textOf(result), "Hi")
+      assert.equal(usageOf(result), undefined)
     },
   )
 })

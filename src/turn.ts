@@ -2,6 +2,7 @@ import type { ServerResponse } from "node:http"
 import type { McpSdkServerConfigWithInstance, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import {
+  type ChatCompletionUsage,
   newResponseID,
   openAIStreamError,
   openAIStreamReasoning,
@@ -48,12 +49,17 @@ export type AgentRunInput = {
 
 export type AgentRun = (input: AgentRunInput) => AsyncIterable<SDKMessage>
 
+/** Token counts of one Claude API message. `input` excludes the cached parts, as the API reports it. */
+export type MessageUsage = { input: number; cacheRead: number; cacheWrite: number; output: number }
+
 type TurnEvent =
   | { type: "text"; text: string }
   | { type: "reasoning"; text: string }
   | { type: "tool_call"; id: string; name: string; arguments: string }
   /** The tool calls of one Claude message, which OpenCode answers together. */
   | { type: "tool_calls_end"; ids: string[] }
+  /** Token usage of one Claude API message, sent before the event that ends its response. */
+  | { type: "usage"; usage: MessageUsage }
   | { type: "done" }
   | { type: "error"; message: string; error: ErrorClass }
 
@@ -130,6 +136,8 @@ export class Turn {
   private readonly blocks = new Map<number, StreamingToolUse>()
   /** Tool calls in the Claude message being streamed. */
   private messageToolCalls: string[] = []
+  /** Token usage of the Claude message being streamed. */
+  private messageUsage: MessageUsage | undefined
   private terminal = false
   /** Why the turn was disposed, reported if that cut a response short. */
   private disposeReason: string | undefined
@@ -232,6 +240,19 @@ export class Turn {
       if (!response.writableEnded && !response.destroyed) response.end(body)
     }
 
+    // Context size is the input of the latest Claude message in this response; output adds up across them.
+    let usage: ChatCompletionUsage | undefined
+    const addUsage = (message: MessageUsage) => {
+      const prompt = message.input + message.cacheRead + message.cacheWrite
+      const completion = (usage?.completion_tokens ?? 0) + message.output
+      usage = {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: prompt + completion,
+        prompt_tokens_details: { cached_tokens: message.cacheRead, cache_write_tokens: message.cacheWrite },
+      }
+    }
+
     write(sse(openAIStreamStart(responseID, model)))
     for (;;) {
       const event = await this.events.next()
@@ -242,7 +263,9 @@ export class Turn {
         end(sse(openAIStreamError(this.disposeReason ?? "The Claude turn ended early.", BRIDGE_ERROR)) + SSE_DONE)
         return
       }
-      if (event.type === "reasoning") {
+      if (event.type === "usage") {
+        addUsage(event.usage)
+      } else if (event.type === "reasoning") {
         write(sse(openAIStreamReasoning(responseID, model, event.text)))
       } else if (event.type === "text") {
         write(sse(openAIStreamText(responseID, model, event.text)))
@@ -252,11 +275,11 @@ export class Turn {
         for (const id of event.ids) this.awaiting.add(id)
         this.status = "awaiting_results"
         this.armIdleTimer()
-        end(sse(openAIStreamStop(responseID, model, "tool_calls")) + SSE_DONE)
+        end(sse(openAIStreamStop(responseID, model, "tool_calls", usage)) + SSE_DONE)
         return
       } else if (event.type === "done") {
         this.completed = true
-        end(sse(openAIStreamStop(responseID, model)) + SSE_DONE)
+        end(sse(openAIStreamStop(responseID, model, "stop", usage)) + SSE_DONE)
         this.dispose("The Claude turn has finished.")
         return
       } else {
@@ -333,6 +356,20 @@ export class Turn {
     if (event.type === "message_start") {
       this.blocks.clear()
       this.messageToolCalls = []
+      // Read defensively: a frame without usage must not end the turn.
+      const usage = (event.message as { usage?: Partial<typeof event.message.usage> } | undefined)?.usage
+      this.messageUsage = usage
+        ? {
+            input: usage.input_tokens ?? 0,
+            cacheRead: usage.cache_read_input_tokens ?? 0,
+            cacheWrite: usage.cache_creation_input_tokens ?? 0,
+            output: usage.output_tokens ?? 0,
+          }
+        : undefined
+    } else if (event.type === "message_delta") {
+      // Output counts in message_delta are cumulative for the message.
+      const output = (event as { usage?: { output_tokens?: number } }).usage?.output_tokens
+      if (this.messageUsage && typeof output === "number") this.messageUsage.output = output
     } else if (event.type === "content_block_start") {
       if (event.content_block.type === "tool_use") {
         this.blocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: "" })
@@ -349,6 +386,9 @@ export class Turn {
       this.blocks.delete(event.index)
       if (block) this.completeToolUse(block)
     } else if (event.type === "message_stop") {
+      // Queued before the batch's end, so it lands in the response this message belongs to.
+      if (this.messageUsage) this.events.push({ type: "usage", usage: this.messageUsage })
+      this.messageUsage = undefined
       if (this.messageToolCalls.length > 0) this.events.push({ type: "tool_calls_end", ids: this.messageToolCalls })
       this.messageToolCalls = []
     }

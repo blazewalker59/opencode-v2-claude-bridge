@@ -40,6 +40,18 @@ export type ChatCompletionToolCallDelta = {
 
 export type FinishReason = "stop" | "tool_calls"
 
+/**
+ * Token usage in the OpenAI shape OpenCode reads. `prompt_tokens` is the whole
+ * input, cached parts included: OpenCode derives uncached input as
+ * `prompt_tokens - cached_tokens - cache_write_tokens`.
+ */
+export type ChatCompletionUsage = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  prompt_tokens_details: { cached_tokens: number; cache_write_tokens: number }
+}
+
 export type ChatCompletionChunk = {
   id: string
   object: "chat.completion.chunk"
@@ -56,6 +68,7 @@ export type ChatCompletionChunk = {
     }
     finish_reason: FinishReason | null
   }>
+  usage?: ChatCompletionUsage
 }
 
 export const textContent = (content: ChatMessage["content"]): string => {
@@ -202,8 +215,11 @@ export const openAIStreamToolCall = (
     finish_reason: null,
   })
 
-export const openAIStreamStop = (id: string, model: string, reason: FinishReason = "stop") =>
-  chunk(id, model, { index: 0, delta: {}, finish_reason: reason })
+/** The final chunk of a response, carrying its token usage when Claude reported any. */
+export const openAIStreamStop = (id: string, model: string, reason: FinishReason = "stop", usage?: ChatCompletionUsage) => ({
+  ...chunk(id, model, { index: 0, delta: {}, finish_reason: reason }),
+  ...(usage ? { usage } : {}),
+})
 
 /**
  * An error chunk. OpenCode reads a numeric `code` as the HTTP status and uses

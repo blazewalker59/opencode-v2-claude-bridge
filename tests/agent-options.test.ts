@@ -90,6 +90,7 @@ test("every query keeps the git snapshot out of the prompt and skips claude.ai c
     const options = agentOptions("/work", { ...base, system })
     assert.deepEqual(options.settings, { includeGitInstructions: false }, "a commit must not rewrite the cached prompt")
     assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "claude.ai connectors are never fetched")
+    assert.equal(options.env?.DISABLE_AUTO_COMPACT, "1", "OpenCode compacts the conversation, never Claude Code behind its back")
     assert.equal(options.env?.PATH, process.env.PATH, "the Agent SDK replaces the environment, so the inherited one is copied")
   }
 })
