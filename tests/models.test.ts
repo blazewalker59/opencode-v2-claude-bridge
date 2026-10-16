@@ -63,10 +63,14 @@ test("discovery never sends a message, keeps nothing on disk, and always closes 
   assert.equal(models.length, 5)
   assert.equal(sent, false, "the input iterable never yields a message")
   assert.equal(closed, 1)
-  assert.deepEqual(seen, {
+  const { env, ...rest } = seen ?? {}
+  assert.equal(env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "the same child environment as a turn")
+  assert.equal(env?.PATH, process.env.PATH, "the inherited environment is kept")
+  assert.deepEqual(rest, {
     cwd: "/work",
     pathToClaudeCodeExecutable: "/opt/claude",
-    settingSources: [],
+    settingSources: ["user"],
+    settings: { includeGitInstructions: false },
     persistSession: false,
     tools: [],
     mcpServers: {},
@@ -110,4 +114,20 @@ test("unloading the plugin cancels discovery and closes the query", async () => 
   unload.abort()
   await assert.rejects(discovery, /cancelled/)
   assert.equal(closed, 1)
+})
+
+test("a model's effort levels come from Claude Code, keeping only levels the Agent SDK accepts", () => {
+  const catalog = toCatalog([
+    { value: "opus", displayName: "Opus", description: "Opus", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+    { value: "sonnet", displayName: "Sonnet", description: "Sonnet", supportedEffortLevels: ["low", "turbo" as "low"] },
+    { value: "haiku", displayName: "Haiku", description: "Haiku" },
+  ])
+  assert.deepEqual(
+    catalog.map((model) => [model.id, model.efforts]),
+    [
+      ["opus", ["low", "medium", "high", "xhigh", "max"]],
+      ["sonnet", ["low"]],
+      ["haiku", undefined],
+    ],
+  )
 })

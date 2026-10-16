@@ -10,6 +10,7 @@ test("defaults are read-only tools and haiku titles", () => {
     claudeExecutable: undefined,
     debugLog: undefined,
     workingDirectory: undefined,
+    claudeDebugDir: undefined,
   })
 })
 
@@ -22,6 +23,7 @@ test("valid options are accepted", () => {
       claudeExecutable: "/opt/claude/bin/claude",
       debugLog: "/tmp/bridge.log",
       workingDirectory: "packages/api",
+      claudeDebugDir: "/tmp/claude-debug",
     }),
     {
       toolPolicy: "opencode",
@@ -30,6 +32,7 @@ test("valid options are accepted", () => {
       claudeExecutable: "/opt/claude/bin/claude",
       debugLog: "/tmp/bridge.log",
       workingDirectory: "packages/api",
+      claudeDebugDir: "/tmp/claude-debug",
     },
   )
 })
@@ -45,6 +48,7 @@ test("malformed options stop the plugin with a message naming the option", () =>
     [{ claudeExecutable: "bin/claude" }, /claudeExecutable must be an absolute path/],
     [{ debugLog: "bridge.log" }, /debugLog must be an absolute path/],
     [{ workingDirectory: "" }, /workingDirectory must be a non-empty string/],
+    [{ claudeDebugDir: "logs" }, /claudeDebugDir must be an absolute path/],
   ]
   for (const [input, message] of cases) assert.throws(() => parsePluginOptions(input), message)
 })

@@ -1,4 +1,5 @@
-import { statSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, statSync } from "node:fs"
+import { homedir } from "node:os"
 import { isAbsolute } from "node:path"
 import { Model, type Plugin, Provider } from "@opencode/plugin"
 import { type Options, query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -13,6 +14,7 @@ import {
 } from "./models.js"
 import { type BridgeLog, startBridgeServer, TOKEN_HEADER } from "./bridge-server.js"
 import { openDebugLog } from "./debug-log.js"
+import { readInstructions } from "./instructions.js"
 import {
   forgetDeletedSessions,
   isSessionState,
@@ -32,6 +34,8 @@ export type SetupDependencies = {
   query?: (prompt: AsyncIterable<SDKUserMessage>, options: Options) => Pick<Query, "supportedModels" | "close">
   isDirectory?: (path: string) => boolean
   env?: NodeJS.ProcessEnv
+  /** Home directory, where the global instruction files live. */
+  home?: string
   /** Problems worth telling the user about that should not stop the plugin from loading. */
   warn?: (message: string) => void
 }
@@ -46,6 +50,31 @@ const isDirectory = (path: string): boolean => {
   } catch {
     return false
   }
+}
+
+/**
+ * The Claude Code debug directory, readable only by you: its logs can contain
+ * message content. A missing directory is created that way. An existing one is
+ * used only if it already is, and its permissions are never changed, so naming
+ * a shared directory cannot quietly lock others out of it. A directory that
+ * cannot be used stops the plugin from loading, naming it, as a bad `debugLog` does.
+ */
+const prepareDebugDir = (dir: string): string => {
+  const unusable = (reason: string) => new Error(`Plugin option claudeDebugDir: cannot use ${dir}: ${reason}`)
+  let created: string | undefined
+  try {
+    // The first directory created, or undefined when `dir` already existed.
+    created = mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (created !== undefined) chmodSync(dir, 0o700)
+  } catch (error) {
+    throw unusable(error instanceof Error ? error.message : String(error))
+  }
+  if (created !== undefined) return dir
+  const stats = lstatSync(dir)
+  if (!stats.isDirectory()) throw unusable("it is not a directory (a symbolic link is not followed)")
+  if (process.getuid && stats.uid !== process.getuid()) throw unusable("it belongs to another user")
+  if ((stats.mode & 0o077) !== 0) throw unusable("other users can open it; name a new directory, or run chmod 700 on it")
+  return dir
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -148,6 +177,9 @@ export const setupBridge = async (context: SetupContext, dependencies: SetupDepe
     sessions,
     titleModel: options.titleModel,
     claudeExecutable: options.claudeExecutable,
+    claudeDebugDir: options.claudeDebugDir && prepareDebugDir(options.claudeDebugDir),
+    // Found from the OpenCode project, as OpenCode finds them, whatever directory Claude Code runs in.
+    instructions: () => readInstructions(context.location.directory, dependencies.home ?? homedir(), env),
     // The first request can arrive before discovery answers; wait briefly for it.
     summarizedThinking: async (model) => {
       await Promise.race([discoveryDone, new Promise((resolve) => setTimeout(resolve, 2_000).unref())])
@@ -227,6 +259,9 @@ export const setupBridge = async (context: SetupContext, dependencies: SetupDepe
           name: model.name,
           limit: { context: model.context, input: model.context, output: model.output },
           capabilities: { tools: true, input: ["text", "image", "pdf"], output: ["text"] },
+          // One variant per effort level Claude Code reports for the model; the bridge reads
+          // `reasoning_effort` from the request and passes it to the Agent SDK as `effort`.
+          variants: (model.efforts ?? []).map((level) => ({ id: Model.VariantID.make(level), body: { reasoning_effort: level } })),
         })),
       })
     })

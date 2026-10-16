@@ -29,6 +29,8 @@ export type ChatCompletionRequest = {
   /** Validated by the tool bridge; OpenCode sends OpenAI function tool definitions. */
   tools?: unknown
   tool_choice?: unknown
+  /** Set by the plugin's model variants; one of the Agent SDK's effort levels, or ignored. */
+  reasoning_effort?: unknown
 }
 
 export type ChatCompletionToolCallDelta = {
@@ -39,6 +41,18 @@ export type ChatCompletionToolCallDelta = {
 }
 
 export type FinishReason = "stop" | "tool_calls"
+
+/**
+ * Token usage in the OpenAI shape OpenCode reads. `prompt_tokens` is the whole
+ * input, cached parts included: OpenCode derives uncached input as
+ * `prompt_tokens - cached_tokens - cache_write_tokens`.
+ */
+export type ChatCompletionUsage = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  prompt_tokens_details: { cached_tokens: number; cache_write_tokens: number }
+}
 
 export type ChatCompletionChunk = {
   id: string
@@ -56,6 +70,7 @@ export type ChatCompletionChunk = {
     }
     finish_reason: FinishReason | null
   }>
+  usage?: ChatCompletionUsage
 }
 
 export const textContent = (content: ChatMessage["content"]): string => {
@@ -66,6 +81,39 @@ export const textContent = (content: ChatMessage["content"]): string => {
     .map((part) => part.text ?? "")
     .join("")
 }
+
+/** OpenCode's wrapper for a mid-session harness notice (instruction or tool-catalog changes), sent inside a user message. Its body is HTML-escaped, so it cannot contain the closing tag. */
+const SYSTEM_UPDATE = /<system-update>\n[\s\S]*?\n<\/system-update>\n*/g
+
+const stripSystemUpdates = (text: string) => text.replace(SYSTEM_UPDATE, "")
+
+/**
+ * Remove OpenCode's `<system-update>` notices from user messages. They are
+ * OpenCode harness instructions, which only OpenCode's own agent prompt
+ * explains; Claude runs on Claude Code's prompt, so it would read them as text
+ * injected into the user's message. A user message left with nothing is dropped.
+ */
+export const withoutSystemUpdates = (messages: ChatMessage[]): ChatMessage[] =>
+  messages.flatMap((message): ChatMessage[] => {
+    if (message.role !== "user") return [message]
+    const { content } = message
+    if (typeof content === "string") {
+      const text = stripSystemUpdates(content)
+      if (text === content) return [message]
+      return text.trim().length > 0 ? [{ ...message, content: text }] : []
+    }
+    if (!content) return [message]
+    let changed = false
+    const parts = content.flatMap((part): ChatContentPart[] => {
+      if ((part.type !== undefined && part.type !== "text") || part.text === undefined) return [part]
+      const text = stripSystemUpdates(part.text)
+      if (text === part.text) return [part]
+      changed = true
+      return text.trim().length > 0 ? [{ ...part, text }] : []
+    })
+    if (!changed) return [message]
+    return parts.length > 0 ? [{ ...message, content: parts }] : []
+  })
 
 /**
  * The tags that give a rendered transcript its structure. Their names end in
@@ -169,8 +217,11 @@ export const openAIStreamToolCall = (
     finish_reason: null,
   })
 
-export const openAIStreamStop = (id: string, model: string, reason: FinishReason = "stop") =>
-  chunk(id, model, { index: 0, delta: {}, finish_reason: reason })
+/** The final chunk of a response, carrying its token usage when Claude reported any. */
+export const openAIStreamStop = (id: string, model: string, reason: FinishReason = "stop", usage?: ChatCompletionUsage) => ({
+  ...chunk(id, model, { index: 0, delta: {}, finish_reason: reason }),
+  ...(usage ? { usage } : {}),
+})
 
 /**
  * An error chunk. OpenCode reads a numeric `code` as the HTTP status and uses

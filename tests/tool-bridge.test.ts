@@ -10,6 +10,7 @@ import {
   followUpNote,
   parseToolPolicy,
   PendingToolCalls,
+  TOOL_USE_ID_META,
   toToolResult,
 } from "../src/tool-bridge.js"
 import { isErrorResult, resultText } from "./helpers/fake-agent.js"
@@ -296,4 +297,59 @@ test("tool results keep images and note what they cannot carry", () => {
     { type: "text", text: "[attachment not passed through a tool result: application/pdf spec.pdf]" },
     { type: "text", text: "[unsupported attachment omitted: content part input_audio]" },
   ])
+})
+
+test("PendingToolCalls pairs identical parallel calls by Claude Code's tool_use ID, whatever order they arrive in", async () => {
+  const pending = new PendingToolCalls()
+  pending.register("toolu_1", "read", { filePath: "same.ts" })
+  pending.register("toolu_2", "read", { filePath: "same.ts" })
+  const second = pending.claim("read", { filePath: "same.ts" }, undefined, "toolu_2")
+  const first = pending.claim("read", { filePath: "same.ts" }, undefined, "toolu_1")
+  pending.deliver("toolu_1", ok("one"))
+  pending.deliver("toolu_2", ok("two"))
+  assert.deepEqual([resultText(await first), resultText(await second)], ["one", "two"])
+})
+
+test("PendingToolCalls parks a named handler until its own tool_use registers, not a look-alike", async () => {
+  const pending = new PendingToolCalls()
+  const named = pending.claim("read", { filePath: "a.ts" }, undefined, "toolu_2")
+  const unnamed = pending.claim("read", { filePath: "a.ts" })
+  pending.register("toolu_1", "read", { filePath: "a.ts" })
+  pending.register("toolu_2", "read", { filePath: "a.ts" })
+  pending.deliver("toolu_1", ok("for the unnamed handler"))
+  pending.deliver("toolu_2", ok("for toolu_2"))
+  assert.equal(resultText(await named), "for toolu_2")
+  assert.equal(resultText(await unnamed), "for the unnamed handler")
+})
+
+test("a handler naming a tool_use that never arrives falls back to tool name and arguments when the wait ends", async () => {
+  const pending = new PendingToolCalls(20)
+  pending.register("toolu_streamed", "read", { filePath: "a.ts" })
+  const named = pending.claim("read", { filePath: "a.ts" }, undefined, "toolu_other_format")
+  pending.deliver("toolu_streamed", ok("paired by arguments"))
+  assert.equal(resultText(await named), "paired by arguments")
+  assert.equal(pending.size, 0)
+
+  const unmatched = await pending.claim("glob", {}, undefined, "toolu_missing")
+  assert.match(resultText(unmatched), /no pending "glob" call/, "with nothing to pair, it is still refused")
+})
+
+test("the MCP server reads the tool_use ID Claude Code stamps on tools/call", async () => {
+  const pending = new PendingToolCalls()
+  const { tools } = convertTools([{ type: "function", function: { name: "read", parameters: { type: "object" } } }], "read-only")
+  const server = createToolServer(tools, pending)
+  const client = new Client({ name: "claude-code", version: "0" })
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair()
+  await Promise.all([server.instance.connect(serverSide), client.connect(clientSide)])
+  try {
+    pending.register("toolu_1", "read", {})
+    pending.register("toolu_2", "read", {})
+    const call = client.callTool({ name: "read", arguments: {}, _meta: { [TOOL_USE_ID_META]: "toolu_2" } })
+    await new Promise((resolve) => setImmediate(resolve))
+    pending.deliver("toolu_2", ok("second"))
+    assert.equal(resultText(await call), "second")
+    assert.equal(pending.size, 1, "toolu_1 is still waiting for its own handler")
+  } finally {
+    await client.close()
+  }
 })

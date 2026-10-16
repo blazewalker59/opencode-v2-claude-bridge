@@ -1,3 +1,4 @@
+import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
 import type { ErrorClass } from "./errors.js"
 
 /** Environment variables that send the Agent SDK somewhere other than the locally signed-in account. */
@@ -7,7 +8,31 @@ export const GATEWAY_VARIABLES = ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "AN
 export const gatewayVariablesSet = (env: NodeJS.ProcessEnv): string[] =>
   GATEWAY_VARIABLES.filter((name) => (env[name] ?? "").length > 0)
 
-const AUTH_ERROR = /not logged in|please run \/login|invalid api key|authentication|unauthori[sz]ed|oauth token/i
+const WINDOWS: Record<string, string> = {
+  five_hour: "five-hour",
+  seven_day: "weekly",
+  seven_day_opus: "weekly Opus",
+  seven_day_sonnet: "weekly Sonnet",
+  seven_day_overage_included: "weekly",
+  overage: "extra usage",
+}
+
+/** When a Unix-seconds time falls, in local time. */
+export const formatResetTime = (seconds: number) =>
+  new Date(seconds * 1000).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })
+
+/** What Claude Code reported about the spent usage window, in plain words. */
+const describeRejection = (info: SDKRateLimitInfo): string => {
+  const window = info.rateLimitType ? (WINDOWS[info.rateLimitType] ?? info.rateLimitType) : undefined
+  const resets = info.resetsAt ? `; it resets ${formatResetTime(info.resetsAt)}` : ""
+  const parts = [`Claude usage limit reached${window ? ` (${window} window)` : ""}${resets}.`]
+  if (info.overageStatus === "rejected" || info.overageDisabledReason) {
+    parts.push(`Extra usage is not available${info.overageDisabledReason ? ` (${info.overageDisabledReason})` : ""}.`)
+  }
+  return parts.join(" ")
+}
+
+const AUTH_ERROR =/not logged in|please run \/login|invalid api key|authentication|unauthori[sz]ed|oauth token/i
 const MISSING_EXECUTABLE = /ENOENT|(executable|binary) not found|spawn .*claude|cannot find (the )?claude/i
 const UNKNOWN_MODEL = /model.*(not found|not available|invalid|unsupported)|(unknown|invalid) model|not_found_error.*model/i
 
@@ -15,14 +40,21 @@ const UNKNOWN_MODEL = /model.*(not found|not available|invalid|unsupported)|(unk
  * Append repair hints to an Agent SDK error. The original text always comes
  * first and is never rewritten; hints only say what to check. Nothing here
  * claims anything about plans, quotas, or eligibility; the SDK's own text
- * covers those.
+ * covers those, and a usage-limit hint only restates the rate-limit event
+ * Claude Code reported.
  *
  * When the error has been classified, the classification decides which hint
  * fits (a server error that mentions "authentication" is not a login
  * problem); the wording is only used for errors with no API status.
  */
-export const explainAgentError = (message: string, error?: ErrorClass, env: NodeJS.ProcessEnv = process.env): string => {
+export const explainAgentError = (
+  message: string,
+  error?: ErrorClass,
+  env: NodeJS.ProcessEnv = process.env,
+  rateLimit?: SDKRateLimitInfo,
+): string => {
   const hints: string[] = []
+  if (rateLimit?.status === "rejected") hints.push(describeRejection(rateLimit))
   const gateway = gatewayVariablesSet(env)
   // Failures inside the bridge or Claude Code carry no API status; only their wording says what went wrong.
   const unclassified = !error || error.type === "bridge_error"

@@ -1,7 +1,8 @@
 import type { ServerResponse } from "node:http"
-import type { McpSdkServerConfigWithInstance, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { EffortLevel, McpSdkServerConfigWithInstance, SDKMessage, SDKRateLimitInfo, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import {
+  type ChatCompletionUsage,
   newResponseID,
   openAIStreamError,
   openAIStreamReasoning,
@@ -18,6 +19,13 @@ import { type AgentFailure, BRIDGE_ERROR, classifyAgentError, type ErrorClass, i
 import type { RunPlan } from "./sessions.js"
 import { type BridgedTool, createToolServer, errorResult, PendingToolCalls, withNote } from "./tool-bridge.js"
 
+/**
+ * Agent turns run on Claude Code's own system prompt plus the user's
+ * instruction files; OpenCode's agent prompt is not forwarded. One-off task
+ * requests (titles, compaction) keep OpenCode's task prompt, which is the task.
+ */
+export type SystemPrompt = { type: "claude-code"; append?: string } | { type: "task"; text: string }
+
 export type AgentRunInput = {
   /** Streaming input: one user message, held open until the turn ends. */
   prompt: AsyncIterable<SDKUserMessage>
@@ -27,8 +35,8 @@ export type AgentRunInput = {
   toolServer?: McpSdkServerConfigWithInstance
   /** Fully qualified MCP tool names Claude may call (`mcp__opencode__*`). */
   allowedTools: string[]
-  /** OpenCode's system prompt, used as the Agent SDK system prompt. */
-  systemPrompt?: string
+  /** The system prompt for this turn. */
+  system: SystemPrompt
   /** Resume this Agent SDK session. */
   resume?: string
   /** Start a new Agent SDK session with this ID. */
@@ -37,9 +45,29 @@ export type AgentRunInput = {
   persistSession: boolean
   /** Ask for summarized thinking, so it can stream to OpenCode as reasoning. Only for models that support adaptive thinking. */
   showThinking?: boolean
+  /** Reasoning effort chosen through an OpenCode model variant. */
+  effort?: EffortLevel
+  /** Write Claude Code's own debug log for this query here (opt-in). */
+  debugFile?: string
 }
 
 export type AgentRun = (input: AgentRunInput) => AsyncIterable<SDKMessage>
+
+/** Token counts of one Claude API message. `input` excludes the cached parts, as the API reports it. */
+export type MessageUsage = { input: number; cacheRead: number; cacheWrite: number; output: number }
+
+/** API token counts, read defensively: a field or the whole object may be missing, and that must not end the turn. */
+type ApiUsage = { input_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens?: number | null }
+
+const toMessageUsage = (usage: ApiUsage | undefined): MessageUsage | undefined =>
+  usage
+    ? {
+        input: usage.input_tokens ?? 0,
+        cacheRead: usage.cache_read_input_tokens ?? 0,
+        cacheWrite: usage.cache_creation_input_tokens ?? 0,
+        output: usage.output_tokens ?? 0,
+      }
+    : undefined
 
 type TurnEvent =
   | { type: "text"; text: string }
@@ -47,6 +75,8 @@ type TurnEvent =
   | { type: "tool_call"; id: string; name: string; arguments: string }
   /** The tool calls of one Claude message, which OpenCode answers together. */
   | { type: "tool_calls_end"; ids: string[] }
+  /** Token usage of one Claude API message, sent before the event that ends its response. */
+  | { type: "usage"; usage: MessageUsage }
   | { type: "done" }
   | { type: "error"; message: string; error: ErrorClass }
 
@@ -84,8 +114,10 @@ export type TurnOptions = {
   model: string
   /** Tried in order; a later plan runs only if the previous one failed before Claude produced output. */
   plans: RunPlan[]
-  system?: string
+  system: SystemPrompt
   showThinking?: boolean
+  effort?: EffortLevel
+  debugFile?: string
   tools: BridgedTool[]
   toolResultTimeoutMs: number
   /** Called once per tool call OpenCode must answer, so the server can route its result here. */
@@ -93,6 +125,8 @@ export type TurnOptions = {
   onDispose: (turn: Turn, reason: string) => void
   /** Called when a plan fails before any output and the next plan is tried. */
   onFallback?: (reason: string) => void
+  /** Called with each rate-limit event Claude Code reports (usage-window status, never content). */
+  onRateLimit?: (info: SDKRateLimitInfo) => void
 }
 
 /**
@@ -123,6 +157,12 @@ export class Turn {
   private readonly blocks = new Map<number, StreamingToolUse>()
   /** Tool calls in the Claude message being streamed. */
   private messageToolCalls: string[] = []
+  /** Token usage of the Claude message being streamed. */
+  private messageUsage: MessageUsage | undefined
+  /** IDs of Claude messages already delivered, by stream or whole. */
+  private readonly delivered = new Set<string>()
+  /** True while the stream repeats a message already delivered whole. */
+  private skipping = false
   private terminal = false
   /** Why the turn was disposed, reported if that cut a response short. */
   private disposeReason: string | undefined
@@ -132,6 +172,8 @@ export class Turn {
   private emitted = false
   /** The SDK's category for an API error in the current attempt, from its synthetic assistant message. */
   private apiErrorCategory: AgentFailure["category"]
+  /** The latest rate-limit event, so a failure after a spent usage window is reported as such. */
+  private rateLimit: SDKRateLimitInfo | undefined
 
   constructor(private readonly options: TurnOptions) {
     this.toolsByQualifiedName = new Map(options.tools.map((tool) => [tool.qualifiedName, tool]))
@@ -158,11 +200,13 @@ export class Turn {
         // An MCP server instance connects once, so each attempt gets its own.
         toolServer: this.options.tools.length > 0 ? createToolServer(this.options.tools, this.pending) : undefined,
         allowedTools: this.options.tools.map((tool) => tool.qualifiedName),
-        systemPrompt: this.options.system,
+        system: this.options.system,
         resume: plan.resume,
         sessionId: plan.sessionId,
         persistSession: plan.persist,
         showThinking: this.options.showThinking,
+        effort: this.options.effort,
+        debugFile: this.options.debugFile,
       })
     } catch (error) {
       // Reported like any other failure: as an error chunk, never an exception out of a fallback.
@@ -225,6 +269,19 @@ export class Turn {
       if (!response.writableEnded && !response.destroyed) response.end(body)
     }
 
+    // Context size is the input of the latest Claude message in this response; output adds up across them.
+    let usage: ChatCompletionUsage | undefined
+    const addUsage = (message: MessageUsage) => {
+      const prompt = message.input + message.cacheRead + message.cacheWrite
+      const completion = (usage?.completion_tokens ?? 0) + message.output
+      usage = {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: prompt + completion,
+        prompt_tokens_details: { cached_tokens: message.cacheRead, cache_write_tokens: message.cacheWrite },
+      }
+    }
+
     write(sse(openAIStreamStart(responseID, model)))
     for (;;) {
       const event = await this.events.next()
@@ -235,7 +292,9 @@ export class Turn {
         end(sse(openAIStreamError(this.disposeReason ?? "The Claude turn ended early.", BRIDGE_ERROR)) + SSE_DONE)
         return
       }
-      if (event.type === "reasoning") {
+      if (event.type === "usage") {
+        addUsage(event.usage)
+      } else if (event.type === "reasoning") {
         write(sse(openAIStreamReasoning(responseID, model, event.text)))
       } else if (event.type === "text") {
         write(sse(openAIStreamText(responseID, model, event.text)))
@@ -245,11 +304,11 @@ export class Turn {
         for (const id of event.ids) this.awaiting.add(id)
         this.status = "awaiting_results"
         this.armIdleTimer()
-        end(sse(openAIStreamStop(responseID, model, "tool_calls")) + SSE_DONE)
+        end(sse(openAIStreamStop(responseID, model, "tool_calls", usage)) + SSE_DONE)
         return
       } else if (event.type === "done") {
         this.completed = true
-        end(sse(openAIStreamStop(responseID, model)) + SSE_DONE)
+        end(sse(openAIStreamStop(responseID, model, "stop", usage)) + SSE_DONE)
         this.dispose("The Claude turn has finished.")
         return
       } else {
@@ -285,8 +344,13 @@ export class Turn {
         if (message.type === "stream_event") {
           // Subagent events belong to an inner tool call, not this response.
           if (message.parent_tool_use_id === null) this.onStreamEvent(message.event)
+        } else if (message.type === "rate_limit_event") {
+          this.rateLimit = message.rate_limit_info
+          this.options.onRateLimit?.(message.rate_limit_info)
         } else if (message.type === "assistant") {
-          if (message.error && message.parent_tool_use_id === null) this.apiErrorCategory = message.error
+          if (message.parent_tool_use_id !== null) continue
+          if (message.error) this.apiErrorCategory = message.error
+          else this.onAssistantMessage(message.message as unknown as Parameters<Turn["onAssistantMessage"]>[0])
         } else if (message.type === "result") {
           this.terminal = true
           if (message.subtype === "success" && !message.is_error) this.events.push({ type: "done" })
@@ -294,7 +358,7 @@ export class Turn {
             // An API error ends a "success" result with is_error set and the API's message as the result.
             const detail =
               message.subtype === "success" ? message.result : `Claude Agent SDK error (${message.subtype}): ${message.errors.join("; ")}`
-            if (this.fail({ message: detail, category: this.apiErrorCategory, status: message.subtype === "success" ? message.api_error_status : undefined })) return
+            if (this.fail({ message: detail, category: this.apiErrorCategory, rateLimit: this.rateLimit, status: message.subtype === "success" ? message.api_error_status : undefined })) return
           }
           this.endInput()
         }
@@ -302,18 +366,18 @@ export class Turn {
       // Claude Code always ends a turn with a result message. Without one the turn was cut off
       // (Claude Code exited, say), so its session must not be recorded as resumable.
       if (!this.terminal && this.status !== "finished") {
-        this.fail({ message: "Claude Code ended the turn without a result." })
+        this.fail({ message: "Claude Code ended the turn without a result.", rateLimit: this.rateLimit })
       }
     } catch (error) {
       if (this.status === "finished") return
-      this.fail({ message: error instanceof Error ? error.message : "Claude Agent SDK failure" })
+      this.fail({ message: error instanceof Error ? error.message : "Claude Agent SDK failure", rateLimit: this.rateLimit })
     }
   }
 
   /** Report a failed attempt, or start the next plan when that can still help (returns true). */
   private fail(failure: AgentFailure): boolean {
     const error = classifyAgentError(failure)
-    const text = explainAgentError(failure.message, error)
+    const text = explainAgentError(failure.message, error, process.env, failure.rateLimit)
     if (this.fallBack(text, error)) return true
     this.events.push({ type: "error", message: text, error })
     return false
@@ -324,8 +388,21 @@ export class Turn {
       event.type === "content_block_delta" ? event.delta.type : event.type === "content_block_start" ? `start:${event.content_block.type}` : undefined
     if (kind) this.streamStats[kind] = (this.streamStats[kind] ?? 0) + 1
     if (event.type === "message_start") {
+      const id = (event.message as { id?: string } | undefined)?.id
+      // Already delivered whole (see onAssistantMessage): its stream must not repeat it.
+      this.skipping = id !== undefined && this.delivered.has(id)
+      if (this.skipping) return
+      if (id) this.delivered.add(id)
+      // A stream still open here was abandoned by Claude Code; its unfinished tool calls were never sent.
       this.blocks.clear()
       this.messageToolCalls = []
+      this.messageUsage = toMessageUsage((event.message as { usage?: ApiUsage } | undefined)?.usage)
+    } else if (this.skipping) {
+      if (event.type === "message_stop") this.skipping = false
+    } else if (event.type === "message_delta") {
+      // Output counts in message_delta are cumulative for the message.
+      const output = (event as { usage?: { output_tokens?: number } }).usage?.output_tokens
+      if (this.messageUsage && typeof output === "number") this.messageUsage.output = output
     } else if (event.type === "content_block_start") {
       if (event.content_block.type === "tool_use") {
         this.blocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: "" })
@@ -342,9 +419,43 @@ export class Turn {
       this.blocks.delete(event.index)
       if (block) this.completeToolUse(block)
     } else if (event.type === "message_stop") {
-      if (this.messageToolCalls.length > 0) this.events.push({ type: "tool_calls_end", ids: this.messageToolCalls })
-      this.messageToolCalls = []
+      this.endMessage()
     }
+  }
+
+  /** A Claude message is complete: report its usage, then hand its tool calls to OpenCode. */
+  private endMessage() {
+    // Queued before the batch's end, so it lands in the response this message belongs to.
+    if (this.messageUsage) this.events.push({ type: "usage", usage: this.messageUsage })
+    this.messageUsage = undefined
+    if (this.messageToolCalls.length > 0) this.events.push({ type: "tool_calls_end", ids: this.messageToolCalls })
+    this.messageToolCalls = []
+  }
+
+  /**
+   * A complete assistant message. One the stream already delivered (same ID,
+   * which can arrive before its last content_block_stop) is ignored. One with a
+   * new ID is Claude Code's non-streaming retry after a stalled stream: it has
+   * no stream events of its own, so its text, tool calls and usage are delivered
+   * from here, and the stalled stream's unfinished tool calls are dropped.
+   * Text the stalled stream already sent to OpenCode cannot be withdrawn.
+   */
+  private onAssistantMessage(message: { id?: string; model?: string; content?: unknown; usage?: ApiUsage }) {
+    // Claude Code's own failure notices are reports, not model output.
+    if (message.model === "<synthetic>" || !message.id || this.delivered.has(message.id)) return
+    this.delivered.add(message.id)
+    this.blocks.clear()
+    this.messageToolCalls = []
+    const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : []
+    for (const block of content) {
+      if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) this.emit({ type: "text", text: block.text })
+      else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.length > 0) this.emit({ type: "reasoning", text: block.thinking })
+      else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        this.completeToolUse({ id: block.id, name: block.name, json: JSON.stringify(block.input ?? {}) })
+      }
+    }
+    this.messageUsage = toMessageUsage(message.usage)
+    this.endMessage()
   }
 
   private completeToolUse(block: StreamingToolUse) {

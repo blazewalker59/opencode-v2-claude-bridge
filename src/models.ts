@@ -1,4 +1,5 @@
-import type { ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { EffortLevel, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import { CHILD_SETTINGS, childEnv, SETTING_SOURCES } from "./claude-code.js"
 
 export const PROVIDER_ID = "claude-agent-sdk"
 
@@ -8,7 +9,12 @@ export type BridgeModel = {
   name: string
   context: number
   output: number
+  /** Reasoning effort levels the model supports, offered as OpenCode variants. Empty when unknown. */
+  efforts?: EffortLevel[]
 }
+
+/** The effort levels the Agent SDK accepts. */
+export const EFFORT_LEVELS: readonly EffortLevel[] = ["low", "medium", "high", "xhigh", "max"]
 
 const DEFAULT_CONTEXT = 200_000
 const LONG_CONTEXT = 1_000_000
@@ -17,12 +23,14 @@ const DEFAULT_OUTPUT = 64_000
 /**
  * Used until discovery finishes, or when it fails. Claude Code's aliases
  * always resolve to the current model of each family, so this list does not
- * go stale the way pinned model IDs do.
+ * go stale the way pinned model IDs do. They offer every effort level: a variant
+ * can be chosen before discovery answers, and Claude Code lowers a level a
+ * model does not support instead of failing.
  */
 export const FALLBACK_MODELS: readonly BridgeModel[] = [
-  { id: "opus", name: "Claude Opus (Agent SDK)", context: DEFAULT_CONTEXT, output: DEFAULT_OUTPUT },
-  { id: "sonnet", name: "Claude Sonnet (Agent SDK)", context: DEFAULT_CONTEXT, output: DEFAULT_OUTPUT },
-  { id: "haiku", name: "Claude Haiku (Agent SDK)", context: DEFAULT_CONTEXT, output: DEFAULT_OUTPUT },
+  { id: "opus", name: "Claude Opus (Agent SDK)", context: DEFAULT_CONTEXT, output: DEFAULT_OUTPUT, efforts: [...EFFORT_LEVELS] },
+  { id: "sonnet", name: "Claude Sonnet (Agent SDK)", context: DEFAULT_CONTEXT, output: DEFAULT_OUTPUT, efforts: [...EFFORT_LEVELS] },
+  { id: "haiku", name: "Claude Haiku (Agent SDK)", context: DEFAULT_CONTEXT, output: DEFAULT_OUTPUT, efforts: [...EFFORT_LEVELS] },
 ]
 
 /**
@@ -43,6 +51,7 @@ export const toCatalog = (models: readonly ModelInfo[]): BridgeModel[] => {
         name: `Claude ${model.displayName}${resolved && resolved !== model.displayName ? ` · ${resolved}` : ""} (Agent SDK)`,
         context: /\[1m\]$/i.test(model.resolvedModel ?? model.value) ? LONG_CONTEXT : DEFAULT_CONTEXT,
         output: DEFAULT_OUTPUT,
+        ...(model.supportedEffortLevels?.length ? { efforts: model.supportedEffortLevels.filter((level) => EFFORT_LEVELS.includes(level)) } : {}),
       }
     })
 }
@@ -93,9 +102,9 @@ export const discoverModels = async (
       await new Promise<never>(() => {})
     },
   }
-  // The same lockdown as a turn: no settings, no tools, and no MCP servers (strict mode
-  // ignores the user's), so discovery starts nothing but Claude Code itself.
-  const query = start(silent, { ...options, settingSources: [], persistSession: false, tools: [], mcpServers: {}, strictMcpConfig: true })
+  // The same setup as a turn: the user's settings (so a configured gateway answers discovery
+  // too), no tools, and no MCP servers (strict mode ignores the user's).
+  const query = start(silent, { ...options, settingSources: SETTING_SOURCES, settings: CHILD_SETTINGS, env: childEnv(), persistSession: false, tools: [], mcpServers: {}, strictMcpConfig: true })
   let timer: NodeJS.Timeout | undefined
   let onAbort: () => void = () => {}
   try {

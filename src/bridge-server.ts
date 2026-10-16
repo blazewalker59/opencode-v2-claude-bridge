@@ -1,8 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import { type Options, query } from "@anthropic-ai/claude-agent-sdk"
+import { join } from "node:path"
+import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
-import type { ChatCompletionRequest, ChatMessage } from "./openai.js"
+import type { Instructions } from "./instructions.js"
+import { CHILD_SETTINGS, childEnv, SETTING_SOURCES } from "./claude-code.js"
+import { EFFORT_LEVELS } from "./models.js"
+import { type ChatCompletionRequest, type ChatMessage, withoutSystemUpdates } from "./openai.js"
 import {
   fingerprint,
   KIND_HEADER,
@@ -20,9 +24,9 @@ import {
   toToolResult,
   type ToolPolicy,
 } from "./tool-bridge.js"
-import { type AgentRun, type AgentRunInput, Turn } from "./turn.js"
+import { type AgentRun, type AgentRunInput, type SystemPrompt, Turn } from "./turn.js"
 
-export type { AgentRun, AgentRunInput } from "./turn.js"
+export type { AgentRun, AgentRunInput, SystemPrompt } from "./turn.js"
 
 export type BridgeServerOptions = {
   cwd: string
@@ -40,6 +44,10 @@ export type BridgeServerOptions = {
   titleModel?: string
   /** Path to the Claude Code executable, when it is not where the Agent SDK looks. */
   claudeExecutable?: string
+  /** Directory for Claude Code's own debug log, one file per query. Opt-in: these logs can contain message content. */
+  claudeDebugDir?: string
+  /** The user's instruction files for agent turns, read on every turn. Defaults to none. */
+  instructions?: () => Promise<Instructions>
   /** Whether to show summarized thinking for a model (true only for models known to support adaptive thinking). */
   summarizedThinking?: (model: string) => boolean | Promise<boolean>
   /** The secret every completion request must carry in `TOKEN_HEADER`. Defaults to a new random one. */
@@ -174,11 +182,13 @@ export const agentOptions = (
     abortController,
     toolServer,
     allowedTools,
-    systemPrompt,
+    system,
     resume,
     sessionId,
     persistSession,
     showThinking,
+    effort,
+    debugFile,
   }: Omit<AgentRunInput, "prompt">,
   claudeExecutable?: string,
 ): Options => {
@@ -188,15 +198,23 @@ export const agentOptions = (
     model,
     abortController,
     includePartialMessages: true,
-    settingSources: [],
+    settingSources: SETTING_SOURCES,
+    settings: CHILD_SETTINGS,
+    env: childEnv(),
     persistSession,
     ...(resume ? { resume } : sessionId ? { sessionId } : {}),
-    // OpenCode's own system prompt, rendered fresh on every request so a
-    // resumed session never keeps a stale recorded copy.
-    ...(systemPrompt ? { systemPrompt: { type: "custom", prompt: systemPrompt, snapshot: false } } : {}),
+    // Sent on every turn, resumed ones included: without it the Agent SDK uses a
+    // minimal prompt, not Claude Code's. Rendered fresh on every request so a
+    // resumed session never keeps a stale recorded copy of the instructions.
+    systemPrompt:
+      system.type === "claude-code"
+        ? { type: "preset", preset: "claude_code", ...(system.append ? { append: system.append } : {}), snapshot: false }
+        : { type: "custom", prompt: system.text, snapshot: false },
     // Adaptive thinking is the default for these models; "summarized" makes its text
     // visible so it can stream to OpenCode as reasoning.
     ...(showThinking ? { thinking: { type: "adaptive", display: "summarized" } } : {}),
+    ...(effort ? { effort } : {}),
+    ...(debugFile ? { debug: true, debugFile } : {}),
   }
   return {
     ...common,
@@ -254,6 +272,8 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
   const token = options.token ?? randomBytes(32).toString("base64url")
   /** Set by close(): requests still in flight must not start or continue a Claude turn. */
   let shuttingDown = false
+  /** Numbers each query's Claude Code debug file. */
+  let queries = 0
   let closing: Promise<void> | undefined
   const shutdownError = () => new BridgeRequestError(503, "The OpenCode bridge is shutting down")
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
@@ -266,6 +286,15 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
   const turnContext = new Map<Turn, { openCodeSessionId: string | undefined; conversation: ChatMessage[] }>()
   /** In-flight session-state writes, so the next turn of a session reads what the last one recorded. */
   const sessionWrites = new Map<string, Promise<void>>()
+
+  /** The user's instruction files, or none when they cannot be read: a turn never fails over them. */
+  const readInstructions = async (): Promise<Instructions | undefined> => {
+    if (!options.instructions) return undefined
+    return options.instructions().catch((error: unknown) => {
+      log("instructions.error", { message: error instanceof Error ? error.message : String(error) })
+      return undefined
+    })
+  }
 
   /** Stored state, or none when it cannot be read: a full replay is always correct, just more expensive. */
   const readState = (id: string) =>
@@ -312,6 +341,12 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
     }
 
     const { system, conversation } = splitSystem(body.messages)
+    // Agent turns run on Claude Code's own prompt plus the user's instruction files; OpenCode's agent
+    // prompt is not forwarded. A one-off task (title, compaction) keeps OpenCode's prompt: it is the task.
+    const agentTurn = session.kind === undefined || session.kind === "primary"
+    const instructions = agentTurn ? await readInstructions() : undefined
+    const systemPrompt: SystemPrompt =
+      agentTurn || !system ? { type: "claude-code", append: instructions?.text } : { type: "task", text: system }
     // Only the agent loop's own requests continue a session; titles and compaction are throwaway queries.
     const persist = session.openCodeSessionId !== undefined && session.kind === "primary"
     if (persist) await sessionWrites.get(session.openCodeSessionId!)
@@ -320,6 +355,13 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
     // Titles are short; a small model keeps them from costing a large-model query.
     const model = session.kind === "title" && options.titleModel ? options.titleModel : body.model
     const showThinking = (await options.summarizedThinking?.(model)) ?? false
+    // Chosen through a model variant. Titles run on their own small model, so they leave it out.
+    const effort =
+      session.kind !== "title" && EFFORT_LEVELS.includes(body.reasoning_effort as EffortLevel) ? (body.reasoning_effort as EffortLevel) : undefined
+    // One Claude Code debug file per query; the kind comes from a request header, so only a plain word names the file.
+    const debugFile = options.claudeDebugDir
+      ? join(options.claudeDebugDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${/^[a-z]{1,20}$/.test(session.kind ?? "") ? session.kind : "request"}-${++queries}.log`)
+      : undefined
     // The bridge may have begun shutting down while this request waited; close() has
     // already disposed the turns it knew about, so this one must never start.
     if (shuttingDown) throw shutdownError()
@@ -338,8 +380,10 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       run,
       model,
       plans,
-      system,
+      system: systemPrompt,
       showThinking,
+      effort,
+      debugFile,
       tools,
       toolResultTimeoutMs,
       onToolCall: (id, owner) => {
@@ -353,6 +397,16 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
         log("turn.end", { kind: session.kind ?? null, reason, completed: owner.completed, stream: owner.streamStats })
       },
       onFallback: (reason) => log("session.fallback", { reason }),
+      onRateLimit: (info) =>
+        log("rate_limit", {
+          status: info.status,
+          window: info.rateLimitType ?? null,
+          utilization: info.utilization ?? null,
+          resetsAt: info.resetsAt ?? null,
+          overageStatus: info.overageStatus ?? null,
+          overageDisabledReason: info.overageDisabledReason ?? null,
+          usingOverage: info.isUsingOverage ?? null,
+        }),
     })
     turns.add(turn)
     // Only the agent loop's turns own session state. A title request shares the session ID, and
@@ -362,6 +416,16 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       model,
       kind: session.kind ?? null,
       session: plans[0]!.reason,
+      prompt: systemPrompt.type,
+      ...(effort ? { effort } : {}),
+      ...(debugFile ? { claudeDebugFile: debugFile } : {}),
+      ...(instructions
+        ? {
+            instructionFiles: instructions.files,
+            ...(instructions.truncated.length > 0 ? { instructionsTruncated: instructions.truncated } : {}),
+            ...(instructions.unreadable.length > 0 ? { instructionsUnreadable: instructions.unreadable } : {}),
+          }
+        : {}),
       thinking: showThinking,
       bridged: tools.map((tool) => tool.openCodeName),
       withheld,
@@ -475,7 +539,8 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       const body = validateCompletionRequest(await readBody(request, maxBodyBytes))
       await handleCompletion(
         response,
-        body,
+        // Removed before anything else reads the messages, so session fingerprints never include them.
+        { ...body, messages: withoutSystemUpdates(body.messages) },
         { openCodeSessionId: header(request, SESSION_HEADER), kind: header(request, KIND_HEADER) },
         () => closed,
       )

@@ -4,6 +4,31 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-16
+
+### Breaking
+
+- Agent turns run on Claude Code's own system prompt instead of OpenCode's. With a subscription, requests carrying OpenCode's agent prompt failed with `400 You're out of extra usage` even with plan usage left. OpenCode's harness guidance, its `<system-update>` notices inside user messages, skill listing, custom agent prompts and `opencode.json` `instructions` no longer reach Claude; see **System prompt** in the README. Title and compaction requests still use OpenCode's task prompt.
+
+### Added
+
+- Your instruction files reach Claude on every agent turn: the global OpenCode `AGENTS.md`, then `AGENTS.md` or `CLAUDE.md` from each directory between the repository root and the project, with size limits. The debug log's `turn.start` names the prompt kind and the files used.
+- Claude Code runs with your user settings (`~/.claude/settings.json`, `settingSources: ["user"]`), so its `env` (for example an API gateway), user-level hooks and `~/.claude/CLAUDE.md` apply to bridge requests as they do in Claude Code. Project and local Claude Code settings are still not loaded.
+- Responses report token usage (input including cache reads and writes, and output) in the OpenAI `usage` field, so OpenCode's context meter, cost display and automatic compaction see real numbers. Claude Code's own auto-compaction is turned off for bridge queries so it never rewrites its copy of a conversation OpenCode owns.
+- A failure after Claude Code reports a spent usage window is reported to OpenCode as quota (402, not retried), naming the window and its reset time, and whether extra usage is available. The debug log records rate-limit events as `rate_limit`.
+- A stalled response stream no longer loses the answer: Claude Code's non-streaming retry is delivered (text, tool calls, usage) and the stalled stream's unfinished tool calls are dropped. Previously its tool calls never reached OpenCode and the turn failed after waiting for them.
+- Tool calls pair with their MCP requests by the `tool_use` ID Claude Code stamps on each request, so identical parallel calls always get their own results. Requests without the ID, or naming one that never arrives, still pair by tool name and arguments.
+- Reasoning effort: each model gets one OpenCode variant per effort level Claude Code reports (`low` to `max`), for example `claude-agent-sdk/sonnet#high`. The variant sets `reasoning_effort`, which the bridge passes to the Agent SDK as `effort`; the debug log's `turn.start` records it.
+- `claudeDebugDir` option: Claude Code's own debug log, one file per query, in a directory readable only by you. A missing directory is created that way; an existing one must already be private, and its permissions are never changed. Off by default, since these logs may include content.
+
+### Changed
+
+- The project moved to https://github.com/shadowkrazee/opencode-v2-claude-bridge; releases and the attestation check name it.
+- Claude Agent SDK 0.3.301 (Claude Code 2.1.301), up from 0.3.293.
+- Claude Code's git instructions and git-status snapshot are left out of the system prompt, so a commit no longer forces the conversation to be cached again.
+- claude.ai connectors are no longer fetched for bridge queries; Claude could never call them.
+- Claude Code's requests name this plugin in their User-Agent (`client-app/opencode-v2-claude-bridge/<version>`), through the Agent SDK's `CLAUDE_AGENT_SDK_CLIENT_APP`.
+
 ## [0.2.0] - 2026-10-15
 
 ### Breaking

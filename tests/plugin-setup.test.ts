@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -24,7 +24,7 @@ type ModelRequest = { headers: Record<string, string>; sessionID: string; kind: 
 const fakeOpenCode = (options: Record<string, unknown> = {}, overrides: { hookDispose?: () => Promise<void>; transformFails?: boolean } = {}) => {
   const hooks: Array<(request: ModelRequest) => void> = []
   const disposed: string[] = []
-  const added: Array<{ info: { settings: { baseURL: string } }; models: Array<{ id: string; name: string }> }> = []
+  const added: Array<{ info: { settings: { baseURL: string } }; models: Array<{ id: string; name: string; variants?: Array<{ id: string; body?: Record<string, unknown> }> }> }> = []
   const transforms: Array<(editor: unknown) => void> = []
   const editor = { add: (input: (typeof added)[number]) => added.push(input) }
   let reloads = 0
@@ -71,6 +71,9 @@ const fakeOpenCode = (options: Record<string, unknown> = {}, overrides: { hookDi
     },
     get models() {
       return added.at(-1)!.models.map((model) => [String(model.id), model.name])
+    },
+    get variants() {
+      return Object.fromEntries(added.at(-1)!.models.map((model) => [String(model.id), model.variants ?? []]))
     },
   }
 }
@@ -192,4 +195,62 @@ test("a bad debug-log variable only warns, but a bad debugLog option stops the p
     setupBridge(fakeOpenCode({ debugLog: "/nonexistent-dir/bridge.log" }).context, quietDiscovery(Promise.resolve(MODELS))),
     /Cannot write the debug log/,
   )
+})
+
+test("each effort level Claude Code reports for a model becomes an OpenCode variant that sets reasoning_effort", async () => {
+  const openCode = fakeOpenCode()
+  const models: ModelInfo[] = [
+    { value: "sonnet", displayName: "Sonnet", description: "Sonnet 5.5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+    { value: "haiku", displayName: "Haiku", description: "Haiku 5.5" },
+  ]
+  const teardown = await setupBridge(openCode.context, quietDiscovery(Promise.resolve(models)))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await teardown()
+  assert.deepEqual(openCode.variants.sonnet, [
+    { id: "low", body: { reasoning_effort: "low" } },
+    { id: "medium", body: { reasoning_effort: "medium" } },
+    { id: "high", body: { reasoning_effort: "high" } },
+  ])
+  assert.deepEqual(openCode.variants.haiku, [], "no variants for a model without effort levels")
+})
+
+test("claudeDebugDir is created readable only by you, and an unusable one stops the plugin", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocb-cc-debug-"))
+  try {
+    const target = join(dir, "nested", "claude")
+    const teardown = await setupBridge(fakeOpenCode({ claudeDebugDir: target }).context, quietDiscovery(Promise.resolve(MODELS)))
+    await teardown()
+    assert.equal(statSync(target).mode & 0o777, 0o700)
+    writeFileSync(join(dir, "file"), "")
+    await assert.rejects(
+      setupBridge(fakeOpenCode({ claudeDebugDir: join(dir, "file", "sub") }).context, quietDiscovery(Promise.resolve(MODELS))),
+      /claudeDebugDir: cannot use/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("an existing claudeDebugDir is used only if it is already private, and its permissions are never changed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocb-cc-debug-"))
+  const setup = (claudeDebugDir: string) => setupBridge(fakeOpenCode({ claudeDebugDir }).context, quietDiscovery(Promise.resolve(MODELS)))
+  try {
+    const shared = join(dir, "shared")
+    mkdirSync(shared)
+    chmodSync(shared, 0o755)
+    await assert.rejects(setup(shared), /other users can open it/)
+    assert.equal(statSync(shared).mode & 0o777, 0o755, "a shared directory is left as it was")
+
+    const linked = join(dir, "linked")
+    symlinkSync(shared, linked)
+    await assert.rejects(setup(linked), /not a directory/)
+
+    const private_ = join(dir, "private")
+    mkdirSync(private_, { mode: 0o700 })
+    chmodSync(private_, 0o700)
+    await (await setup(private_))()
+    assert.equal(statSync(private_).mode & 0o777, 0o700)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

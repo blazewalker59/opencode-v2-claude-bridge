@@ -6,12 +6,16 @@ import { agentOptions, type AgentRunInput, type BridgeServerOptions, startBridge
 import type { ChatMessage } from "../src/openai.js"
 import {
   apiError,
+  assistantMessage,
   deferred,
   failure,
   isErrorResult,
+  messageDelta,
   messageStart,
   messageStop,
   resultText,
+  rateLimitEvent,
+  streamEvent,
   type Script,
   scriptedRun,
   success,
@@ -30,6 +34,7 @@ import {
   timelineOf,
   toolCallsOf,
   toolMessage,
+  usageOf,
 } from "./helpers/http.js"
 
 const model = "claude-sonnet-4-6"
@@ -788,6 +793,143 @@ test("tool results on a request that drops are not delivered, so OpenCode's retr
       })
       const retry = await post(port, results)
       assert.equal(textOf(retry), "It says: export {}")
+    },
+  )
+})
+
+test("each response reports its Claude message's token usage, with cached input counted in the prompt", async () => {
+  await withBridge(
+    async function* ({ client }) {
+      yield messageStart({ input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 3000, cache_creation_input_tokens: 500 })
+      yield* toolUseBlock(0, "toolu_1", "mcp__opencode__read", { filePath: "src/a.ts" })
+      yield messageDelta(40)
+      yield messageStop()
+      await client!.callTool(read("src/a.ts"))
+      yield messageStart({ input_tokens: 25, output_tokens: 1, cache_read_input_tokens: 3500, cache_creation_input_tokens: 60 })
+      yield* textBlock(0, "Done.")
+      yield messageDelta(7)
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      const first = await post(port, { model, stream: true, messages: [ASK], tools: TOOLS })
+      assert.deepEqual(usageOf(first), {
+        prompt_tokens: 3510,
+        completion_tokens: 40,
+        total_tokens: 3550,
+        prompt_tokens_details: { cached_tokens: 3000, cache_write_tokens: 500 },
+      })
+      const second = await post(port, {
+        model,
+        stream: true,
+        tools: TOOLS,
+        messages: [ASK, assistantToolCalls(first), toolMessage("toolu_1", "x")],
+      })
+      assert.deepEqual(
+        usageOf(second),
+        { prompt_tokens: 3585, completion_tokens: 7, total_tokens: 3592, prompt_tokens_details: { cached_tokens: 3500, cache_write_tokens: 60 } },
+        "the continuation reports its own message, not the turn's running total",
+      )
+    },
+  )
+})
+
+test("a response with no usage from Claude carries none", async () => {
+  await withBridge(
+    async function* () {
+      yield messageStart()
+      yield* textBlock(0, "Hi")
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      const result = await post(port, { model, stream: true, messages: [ASK] })
+      assert.equal(textOf(result), "Hi")
+      assert.equal(usageOf(result), undefined)
+    },
+  )
+})
+
+test("a rate limit after a rejected usage window reaches OpenCode as quota, with the reset time, and is logged", async () => {
+  const logged: Array<[string, Record<string, unknown>]> = []
+  await withBridge(
+    async function* () {
+      yield rateLimitEvent({ status: "rejected", rateLimitType: "seven_day", resetsAt: 1792170000, utilization: 1 })
+      yield* apiError("API Error: 429 rate_limit_error", "rate_limit", 429)
+    },
+    async ({ port }) => {
+      const result = await post(port, { model, stream: true, messages: [ASK] })
+      const error = (result.events.at(-1) as { error: { message: string; type: string; code: number } }).error
+      assert.deepEqual({ type: error.type, code: error.code }, { type: "billing_error", code: 402 }, "OpenCode must not retry a limit that resets in days")
+      assert.match(error.message, /^API Error: 429 rate_limit_error\n\nClaude usage limit reached \(weekly window\); it resets /)
+      assert.deepEqual(logged.find(([event]) => event === "rate_limit")?.[1], {
+        status: "rejected",
+        window: "seven_day",
+        utilization: 1,
+        resetsAt: 1792170000,
+        overageStatus: null,
+        overageDisabledReason: null,
+        usingOverage: null,
+      })
+    },
+    { log: (event, fields) => logged.push([event, fields ?? {}]) },
+  )
+})
+
+test("after a stalled stream, Claude Code's non-streaming retry delivers its text, tool calls and usage", async () => {
+  await withBridge(
+    async function* ({ client }) {
+      // The stream stalls inside a tool call: Claude Code abandons it and asks again without streaming.
+      yield messageStart({ input_tokens: 5, output_tokens: 1 }, "msg_stalled")
+      yield* textBlock(0, "Let me ")
+      yield streamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_dead", name: "mcp__opencode__read", input: {} } })
+      yield assistantMessage(
+        "msg_retry",
+        [
+          { type: "text", text: "Reading it now." },
+          { type: "tool_use", id: "toolu_1", name: "mcp__opencode__read", input: { filePath: "src/a.ts" } },
+        ],
+        { input_tokens: 5, output_tokens: 30, cache_read_input_tokens: 100 },
+      )
+      const result = await client!.callTool(read("src/a.ts"))
+      yield messageStart({ input_tokens: 8, output_tokens: 1 }, "msg_next")
+      yield* textBlock(0, `It says: ${resultText(result)}`)
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      const first = await post(port, { model, stream: true, messages: [ASK], tools: TOOLS })
+      assert.deepEqual(timelineOf(first), ["text:Let me ", "text:Reading it now.", "tool:read", "finish:tool_calls"])
+      assert.deepEqual(toolCallsOf(first).map((call) => call.id), ["toolu_1"], "the stalled stream's unfinished call is dropped")
+      assert.equal(usageOf(first)?.completion_tokens, 30)
+      const second = await post(port, {
+        model,
+        stream: true,
+        tools: TOOLS,
+        messages: [ASK, assistantToolCalls(first), toolMessage("toolu_1", "export const a = 1")],
+      })
+      assert.equal(textOf(second), "It says: export const a = 1")
+    },
+  )
+})
+
+test("a complete assistant message for a message already streamed is not delivered twice", async () => {
+  await withBridge(
+    async function* () {
+      yield messageStart(undefined, "msg_1")
+      yield* textBlock(0, "Hello")
+      // Seen in recorded streams: the whole message can arrive before the stream's last frames.
+      yield assistantMessage("msg_1", [{ type: "text", text: "Hello" }])
+      yield messageStop()
+      // And a message delivered whole first must not repeat when its stream follows.
+      yield assistantMessage("msg_2", [{ type: "text", text: " world" }])
+      yield messageStart(undefined, "msg_2")
+      yield* textBlock(0, " world")
+      yield messageStop()
+      yield success()
+    },
+    async ({ port }) => {
+      assert.equal(textOf(await post(port, { model, stream: true, messages: [ASK] })), "Hello world")
     },
   )
 })
