@@ -56,6 +56,19 @@ export type AgentRun = (input: AgentRunInput) => AsyncIterable<SDKMessage>
 /** Token counts of one Claude API message. `input` excludes the cached parts, as the API reports it. */
 export type MessageUsage = { input: number; cacheRead: number; cacheWrite: number; output: number }
 
+/** API token counts, read defensively: a field or the whole object may be missing, and that must not end the turn. */
+type ApiUsage = { input_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens?: number | null }
+
+const toMessageUsage = (usage: ApiUsage | undefined): MessageUsage | undefined =>
+  usage
+    ? {
+        input: usage.input_tokens ?? 0,
+        cacheRead: usage.cache_read_input_tokens ?? 0,
+        cacheWrite: usage.cache_creation_input_tokens ?? 0,
+        output: usage.output_tokens ?? 0,
+      }
+    : undefined
+
 type TurnEvent =
   | { type: "text"; text: string }
   | { type: "reasoning"; text: string }
@@ -148,8 +161,6 @@ export class Turn {
   private messageUsage: MessageUsage | undefined
   /** IDs of Claude messages already delivered, by stream or whole. */
   private readonly delivered = new Set<string>()
-  /** True between a message_start and its message_stop. */
-  private streamOpen = false
   /** True while the stream repeats a message already delivered whole. */
   private skipping = false
   private terminal = false
@@ -385,17 +396,7 @@ export class Turn {
       // A stream still open here was abandoned by Claude Code; its unfinished tool calls were never sent.
       this.blocks.clear()
       this.messageToolCalls = []
-      this.streamOpen = true
-      // Read defensively: a frame without usage must not end the turn.
-      const usage = (event.message as { usage?: Partial<typeof event.message.usage> } | undefined)?.usage
-      this.messageUsage = usage
-        ? {
-            input: usage.input_tokens ?? 0,
-            cacheRead: usage.cache_read_input_tokens ?? 0,
-            cacheWrite: usage.cache_creation_input_tokens ?? 0,
-            output: usage.output_tokens ?? 0,
-          }
-        : undefined
+      this.messageUsage = toMessageUsage((event.message as { usage?: ApiUsage } | undefined)?.usage)
     } else if (this.skipping) {
       if (event.type === "message_stop") this.skipping = false
     } else if (event.type === "message_delta") {
@@ -424,7 +425,6 @@ export class Turn {
 
   /** A Claude message is complete: report its usage, then hand its tool calls to OpenCode. */
   private endMessage() {
-    this.streamOpen = false
     // Queued before the batch's end, so it lands in the response this message belongs to.
     if (this.messageUsage) this.events.push({ type: "usage", usage: this.messageUsage })
     this.messageUsage = undefined
@@ -440,7 +440,7 @@ export class Turn {
    * from here, and the stalled stream's unfinished tool calls are dropped.
    * Text the stalled stream already sent to OpenCode cannot be withdrawn.
    */
-  private onAssistantMessage(message: { id?: string; model?: string; content?: unknown; usage?: Record<string, number | null | undefined> }) {
+  private onAssistantMessage(message: { id?: string; model?: string; content?: unknown; usage?: ApiUsage }) {
     // Claude Code's own failure notices are reports, not model output.
     if (message.model === "<synthetic>" || !message.id || this.delivered.has(message.id)) return
     this.delivered.add(message.id)
@@ -454,15 +454,7 @@ export class Turn {
         this.completeToolUse({ id: block.id, name: block.name, json: JSON.stringify(block.input ?? {}) })
       }
     }
-    const usage = message.usage
-    this.messageUsage = usage
-      ? {
-          input: usage.input_tokens ?? 0,
-          cacheRead: usage.cache_read_input_tokens ?? 0,
-          cacheWrite: usage.cache_creation_input_tokens ?? 0,
-          output: usage.output_tokens ?? 0,
-        }
-      : undefined
+    this.messageUsage = toMessageUsage(message.usage)
     this.endMessage()
   }
 
