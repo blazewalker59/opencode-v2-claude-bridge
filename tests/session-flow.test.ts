@@ -184,6 +184,52 @@ test("title and compaction requests never create or resume sessions", async () =
   })
 })
 
+test("a compaction request containing a live tool result starts a throwaway replay", async () => {
+  await withBridge(
+    async function* ({ client, input }) {
+      if (!input.persistSession) {
+        yield messageStart()
+        yield* textBlock(0, "summary")
+        yield messageStop()
+        yield success()
+        return
+      }
+      yield messageStart()
+      yield* toolUseBlock(0, "toolu_1", "mcp__opencode__read", { path: "a.ts" })
+      yield messageStop()
+      await client!.callTool({ name: "read", arguments: { path: "a.ts" } })
+      yield messageStart()
+      yield* textBlock(0, "primary turn continued")
+      yield messageStop()
+      yield success()
+    },
+    async ({ port, runs, prompts }) => {
+      const ask: ChatMessage[] = [SYSTEM, { role: "user", content: "Read a.ts" }]
+      const first = await post(port, { model, stream: true, messages: ask, tools: [READ_TOOL] }, primary())
+      const compacted: ChatMessage[] = [
+        { role: "system", content: "Summarize the conversation." },
+        { role: "user", content: "Read a.ts" },
+        assistantToolCalls(first),
+        toolMessage("toolu_1", "export const a = 1"),
+      ]
+
+      const result = await post(
+        port,
+        { model, stream: true, messages: compacted },
+        { [SESSION_HEADER]: "ses_1", [KIND_HEADER]: "compaction" },
+      )
+
+      assert.equal(textOf(result), "summary")
+      assert.equal(runs.length, 2, "compaction starts a new query instead of resuming the live primary turn")
+      assert.equal(runs[1]?.persistSession, false)
+      assert.equal(runs[1]?.resume, undefined)
+      assert.equal(runs[1]?.sessionId, undefined)
+      assert.deepEqual(runs[1]?.system, { type: "task", text: "Summarize the conversation." })
+      assert.match(prompts[1] ?? "", /Read a\.ts[\s\S]*export const a = 1/, "the throwaway query replays the transcript")
+    },
+  )
+})
+
 test("a reverted or forked history replays into a fresh session", async () => {
   await withBridge(replying, async ({ port, runs }) => {
     const first: ChatMessage[] = [SYSTEM, { role: "user", content: "Read a.ts" }]

@@ -68,6 +68,9 @@ export const TOKEN_HEADER = "x-claude-bridge-token"
 /** Which OpenCode session a request serves, from the headers the plugin's `model.request` hook adds. */
 type RequestSession = { openCodeSessionId: string | undefined; kind: string | undefined }
 
+/** Only the agent loop may continue a live turn; one-off tasks always replay in a throwaway query. */
+const isAgentTurn = (session: RequestSession) => session.kind === undefined || session.kind === "primary"
+
 const header = (request: IncomingMessage, name: string): string | undefined => {
   const value = request.headers[name]
   return typeof value === "string" && value.length > 0 ? value : undefined
@@ -343,7 +346,7 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
     const { system, conversation } = splitSystem(body.messages)
     // Agent turns run on Claude Code's own prompt plus the user's instruction files; OpenCode's agent
     // prompt is not forwarded. A one-off task (title, compaction) keeps OpenCode's prompt: it is the task.
-    const agentTurn = session.kind === undefined || session.kind === "primary"
+    const agentTurn = isAgentTurn(session)
     const instructions = agentTurn ? await readInstructions() : undefined
     const systemPrompt: SystemPrompt =
       agentTurn || !system ? { type: "claude-code", append: instructions?.text } : { type: "task", text: system }
@@ -491,7 +494,10 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
       log("request.closed", { kind: session.kind ?? null, stage: "before results" })
       return
     }
-    const resumed = results.size > 0 ? resumeTurn(results, followUps, body.messages) : undefined
+    // A compaction or title prompt may include a live turn's tool results as transcript
+    // content. It must replay those into its own throwaway query, never deliver them to
+    // the waiting primary turn.
+    const resumed = isAgentTurn(session) && results.size > 0 ? resumeTurn(results, followUps, body.messages) : undefined
     const context = resumed && turnContext.get(resumed)
     if (context) context.conversation = splitSystem(body.messages).conversation
     const turn = resumed ?? (await startTurn(body, session, closed))
