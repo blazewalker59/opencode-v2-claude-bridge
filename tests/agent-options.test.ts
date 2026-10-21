@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
 import { agentOptions } from "../src/bridge-server.js"
-import { CLIENT_APP } from "../src/claude-code.js"
+import { childEnv, CLIENT_APP } from "../src/claude-code.js"
 import { convertTools, createToolServer, PendingToolCalls } from "../src/tool-bridge.js"
 
 const AGENT = { type: "claude-code" } as const
@@ -93,9 +93,15 @@ test("every query keeps the git snapshot out of the prompt and skips claude.ai c
     assert.deepEqual(options.settings, { includeGitInstructions: false }, "a commit must not rewrite the cached prompt")
     assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "claude.ai connectors are never fetched")
     assert.equal(options.env?.DISABLE_AUTO_COMPACT, "1", "OpenCode compacts the conversation, never Claude Code behind its back")
+    assert.equal(options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1", "the child uses the same 200K context window advertised to OpenCode")
     assert.equal(options.env?.CLAUDE_AGENT_SDK_CLIENT_APP, CLIENT_APP, "requests name this plugin")
     assert.equal(options.env?.PATH, process.env.PATH, "the Agent SDK replaces the environment, so the inherited one is copied")
   }
+})
+
+test("an explicit 1M model is not forced back to the standard context window", () => {
+  const env = childEnv({ CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" }, "opus[1m]")
+  assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, undefined)
 })
 
 test("a reasoning effort reaches the Agent SDK only when one was chosen", () => {

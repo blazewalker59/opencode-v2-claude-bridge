@@ -258,6 +258,8 @@ The bridge runs Claude Code with your user settings (`~/.claude/settings.json`),
 
 The bridge invokes the public Agent SDK in the local user context. Anthropic's support guidance states that Agent SDK, `claude -p`, and third-party app usage can draw from subscription limits. This project does not handle credentials; the Agent SDK/Claude Code installation does.
 
+Ordinary model aliases run with Claude Code's 200K context policy, matching the limit the bridge reports to OpenCode and keeping automatic compaction out of the 1M usage-credit path. A model ID ending in `[1m]` explicitly opts into the 1M window and any plan or usage-credit requirements Anthropic applies to it.
+
 Before running a live smoke test, confirm that the account holder is willing to consume plan usage.
 
 ## System prompt
