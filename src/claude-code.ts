@@ -35,24 +35,14 @@ export const CLIENT_APP = "opencode-v2-claude-bridge/0.3.0"
  * the token usage the bridge reports. If Claude Code also compacted its copy,
  * the two histories would differ in a way session fingerprints cannot detect.
  *
- * `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`: current Claude aliases can resolve to a
- * native 1M window even though the bridge advertises them to OpenCode as 200K.
- * Holding ordinary models to 200K keeps OpenCode's compaction boundary and the
- * request Claude Code sends on the same tier. An explicit `[1m]` model opts out.
- *
  * `CLAUDE_AGENT_SDK_CLIENT_APP`: names this plugin in the User-Agent of Claude
  * Code's requests, as the Agent SDK documents for apps built on it.
  */
 const CHILD_VARIABLES: Record<string, string> = {
   ENABLE_CLAUDEAI_MCP_SERVERS: "0",
   DISABLE_AUTO_COMPACT: "1",
-  CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
   CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP,
 }
 
 /** The environment for a Claude Code child. The Agent SDK replaces, not merges, the environment, so the inherited one is copied. */
-export const childEnv = (env: NodeJS.ProcessEnv = process.env, model?: string): Record<string, string | undefined> => {
-  const child: Record<string, string | undefined> = { ...env, ...CHILD_VARIABLES }
-  if (model && /\[1m\]$/i.test(model)) delete child.CLAUDE_CODE_DISABLE_1M_CONTEXT
-  return child
-}
+export const childEnv = (env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> => ({ ...env, ...CHILD_VARIABLES })

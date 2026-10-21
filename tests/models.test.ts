@@ -65,7 +65,6 @@ test("discovery never sends a message, keeps nothing on disk, and always closes 
   assert.equal(closed, 1)
   const { env, ...rest } = seen ?? {}
   assert.equal(env?.ENABLE_CLAUDEAI_MCP_SERVERS, "0", "the same child environment as a turn")
-  assert.equal(env?.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1", "discovery uses the standard context policy too")
   assert.equal(env?.PATH, process.env.PATH, "the inherited environment is kept")
   assert.deepEqual(rest, {
     cwd: "/work",

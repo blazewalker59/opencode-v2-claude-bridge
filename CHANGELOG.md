@@ -4,10 +4,6 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
-### Fixed
-
-- Ordinary Claude model aliases now run with the same 200K context window the bridge advertises to OpenCode. Native-1M aliases could previously route automatic compaction through the 1M usage-credit tier even though OpenCode selected a standard-context model. Explicit `[1m]` model IDs remain an opt-in to the 1M window.
-
 ## [0.3.0] - 2026-10-16
 
 ### Breaking

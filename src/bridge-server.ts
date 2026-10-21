@@ -203,7 +203,7 @@ export const agentOptions = (
     includePartialMessages: true,
     settingSources: SETTING_SOURCES,
     settings: CHILD_SETTINGS,
-    env: childEnv(process.env, model),
+    env: childEnv(),
     persistSession,
     ...(resume ? { resume } : sessionId ? { sessionId } : {}),
     // Sent on every turn, resumed ones included: without it the Agent SDK uses a
