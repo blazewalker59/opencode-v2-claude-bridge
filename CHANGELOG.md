@@ -4,6 +4,8 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-21
+
 ### Fixed
 
 - Compaction no longer fails with `400 You're out of extra usage` on a subscription. OpenCode sends compaction its agent prompt, which the bridge still forwarded; compaction now runs on Claude Code's own prompt, as agent turns do, with OpenCode's summary instructions in the transcript. It also gets no tools, since OpenCode tells Claude not to call any.
