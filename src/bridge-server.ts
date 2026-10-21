@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { join } from "node:path"
-import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk"
+import { type EffortLevel, type Options, query, type SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import type { Instructions } from "./instructions.js"
 import { CHILD_SETTINGS, childEnv, SETTING_SOURCES } from "./claude-code.js"
@@ -289,6 +289,11 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
   const turnContext = new Map<Turn, { openCodeSessionId: string | undefined; conversation: ChatMessage[] }>()
   /** In-flight session-state writes, so the next turn of a session reads what the last one recorded. */
   const sessionWrites = new Map<string, Promise<void>>()
+  /** The latest rate-limit event from any turn, for explaining a quota error that came with none. */
+  let latestRateLimit: SDKRateLimitInfo | undefined
+  /** Only until its window resets: after that it no longer describes the account. */
+  const recentRateLimit = () =>
+    latestRateLimit?.resetsAt !== undefined && latestRateLimit.resetsAt * 1000 > Date.now() ? latestRateLimit : undefined
 
   /** The user's instruction files, or none when they cannot be read: a turn never fails over them. */
   const readInstructions = async (): Promise<Instructions | undefined> => {
@@ -405,7 +410,9 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
         log("turn.end", { kind: session.kind ?? null, reason, completed: owner.completed, stream: owner.streamStats })
       },
       onFallback: (reason) => log("session.fallback", { reason }),
-      onRateLimit: (info) =>
+      recentRateLimit,
+      onRateLimit: (info) => {
+        latestRateLimit = info
         log("rate_limit", {
           status: info.status,
           window: info.rateLimitType ?? null,
@@ -414,7 +421,8 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
           overageStatus: info.overageStatus ?? null,
           overageDisabledReason: info.overageDisabledReason ?? null,
           usingOverage: info.isUsingOverage ?? null,
-        }),
+        })
+      },
     })
     turns.add(turn)
     // Only the agent loop's turns own session state. A title request shares the session ID, and

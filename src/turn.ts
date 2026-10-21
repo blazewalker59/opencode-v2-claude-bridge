@@ -128,6 +128,12 @@ export type TurnOptions = {
   onFallback?: (reason: string) => void
   /** Called with each rate-limit event Claude Code reports (usage-window status, never content). */
   onRateLimit?: (info: SDKRateLimitInfo) => void
+  /**
+   * The latest rate-limit event from any turn whose window has not reset. A
+   * request the API refuses outright reports none, so a quota error with no
+   * event of its own is explained from this one. It never changes the error's class.
+   */
+  recentRateLimit?: () => SDKRateLimitInfo | undefined
 }
 
 /**
@@ -378,7 +384,8 @@ export class Turn {
   /** Report a failed attempt, or start the next plan when that can still help (returns true). */
   private fail(failure: AgentFailure): boolean {
     const error = classifyAgentError(failure)
-    const text = explainAgentError(failure.message, error, process.env, failure.rateLimit)
+    const rateLimit = failure.rateLimit ?? (error.status === 402 ? this.options.recentRateLimit?.() : undefined)
+    const text = explainAgentError(failure.message, error, process.env, rateLimit)
     if (this.fallBack(text, error)) return true
     this.events.push({ type: "error", message: text, error })
     return false
