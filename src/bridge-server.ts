@@ -332,8 +332,11 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
   }
 
   const startTurn = async (body: ChatCompletionRequest, session: RequestSession, closed: () => boolean): Promise<Turn | undefined> => {
+    // OpenCode sends compaction the agent loop's tools but tells Claude not to call them; a tool call
+    // would end the summary, so Claude answers in text only.
+    const compaction = session.kind === "compaction"
     const { tools, withheld } =
-      body.tool_choice === "none" ? { tools: [], withheld: [] } : convertTools(body.tools, toolPolicy)
+      body.tool_choice === "none" || compaction ? { tools: [], withheld: [] } : convertTools(body.tools, toolPolicy)
     // A new message whose history contains a live turn's tool calls means
     // OpenCode moved on (for example, the user interrupted a running tool).
     for (const message of body.messages) {
@@ -345,11 +348,13 @@ export const startBridgeServer = async (options: BridgeServerOptions): Promise<R
 
     const { system, conversation } = splitSystem(body.messages)
     // Agent turns run on Claude Code's own prompt plus the user's instruction files; OpenCode's agent
-    // prompt is not forwarded. A one-off task (title, compaction) keeps OpenCode's prompt: it is the task.
+    // prompt is not forwarded. Compaction resends that agent prompt and asks for the summary in its
+    // last user message, so it runs on Claude Code's prompt too, without the instruction files the
+    // summary leaves out. Other one-off tasks (title, generate) keep OpenCode's prompt: it is the task.
     const agentTurn = isAgentTurn(session)
     const instructions = agentTurn ? await readInstructions() : undefined
     const systemPrompt: SystemPrompt =
-      agentTurn || !system ? { type: "claude-code", append: instructions?.text } : { type: "task", text: system }
+      agentTurn || compaction || !system ? { type: "claude-code", append: instructions?.text } : { type: "task", text: system }
     // Only the agent loop's own requests continue a session; titles and compaction are throwaway queries.
     const persist = session.openCodeSessionId !== undefined && session.kind === "primary"
     if (persist) await sessionWrites.get(session.openCodeSessionId!)

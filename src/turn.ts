@@ -21,8 +21,9 @@ import { type BridgedTool, createToolServer, errorResult, PendingToolCalls, with
 
 /**
  * Agent turns run on Claude Code's own system prompt plus the user's
- * instruction files; OpenCode's agent prompt is not forwarded. One-off task
- * requests (titles, compaction) keep OpenCode's task prompt, which is the task.
+ * instruction files; OpenCode's agent prompt is not forwarded. Compaction runs
+ * on Claude Code's prompt alone. Other one-off task requests (titles) keep
+ * OpenCode's task prompt, which is the task.
  */
 export type SystemPrompt = { type: "claude-code"; append?: string } | { type: "task"; text: string }
 

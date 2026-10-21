@@ -136,6 +136,35 @@ test("a title request keeps OpenCode's task prompt and reads no instruction file
   )
 })
 
+test("a compaction request runs on Claude Code's prompt alone, with no tools", async () => {
+  let reads = 0
+  await withBridge(
+    replying,
+    async ({ port, runs, prompts }) => {
+      // OpenCode resends the agent loop's prompt and tools, and asks for the summary in a last user message.
+      const compaction: ChatMessage[] = [
+        SYSTEM,
+        { role: "user", content: "Read a.ts" },
+        { role: "assistant", content: "Done." },
+        { role: "user", content: "You MUST summarize the conversation above." },
+      ]
+      await post(port, { model, stream: true, messages: compaction, tools: [READ_TOOL] }, { [SESSION_HEADER]: "ses_1", [KIND_HEADER]: "compaction" })
+      assert.deepEqual(runs[0]?.system, { type: "claude-code", append: undefined }, "OpenCode's agent prompt is not forwarded")
+      assert.equal(reads, 0, "the summary leaves instruction files out")
+      assert.equal(runs[0]?.toolServer, undefined)
+      assert.deepEqual(runs[0]?.allowedTools, [])
+      assert.doesNotMatch(prompts[0] ?? "", /build agent/)
+      assert.match(prompts[0] ?? "", /Read a\.ts[\s\S]*You MUST summarize the conversation above\./)
+    },
+    {
+      instructions: async () => {
+        reads++
+        return { text: "x", files: [], truncated: [], unreadable: [] }
+      },
+    },
+  )
+})
+
 test("a turn that used tools is resumable once it finishes", async () => {
   await withBridge(
     async function* ({ client, prompt }) {
@@ -206,11 +235,12 @@ test("a compaction request containing a live tool result starts a throwaway repl
     async ({ port, runs, prompts }) => {
       const ask: ChatMessage[] = [SYSTEM, { role: "user", content: "Read a.ts" }]
       const first = await post(port, { model, stream: true, messages: ask, tools: [READ_TOOL] }, primary())
+      // OpenCode compacts with the agent loop's own request plus a last user message asking for the summary.
       const compacted: ChatMessage[] = [
-        { role: "system", content: "Summarize the conversation." },
-        { role: "user", content: "Read a.ts" },
+        ...ask,
         assistantToolCalls(first),
         toolMessage("toolu_1", "export const a = 1"),
+        { role: "user", content: "Summarize the conversation." },
       ]
 
       const result = await post(
@@ -224,7 +254,7 @@ test("a compaction request containing a live tool result starts a throwaway repl
       assert.equal(runs[1]?.persistSession, false)
       assert.equal(runs[1]?.resume, undefined)
       assert.equal(runs[1]?.sessionId, undefined)
-      assert.deepEqual(runs[1]?.system, { type: "task", text: "Summarize the conversation." })
+      assert.deepEqual(runs[1]?.system, { type: "claude-code", append: undefined })
       assert.match(prompts[1] ?? "", /Read a\.ts[\s\S]*export const a = 1/, "the throwaway query replays the transcript")
     },
   )
